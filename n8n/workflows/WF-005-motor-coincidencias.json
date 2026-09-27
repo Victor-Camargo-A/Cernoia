@@ -1,0 +1,616 @@
+{
+  "name": "[CernoIA PROD] WF-005 - Motor de perfiles y coincidencias SECOP II",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH active_profiles AS (\n    SELECT\n        profile.id AS profile_id,\n        profile.organization_id,\n        profile.name AS profile_name,\n        profile.filter_config,\n        profile.notification_config,\n\n        MD5(\n            profile.filter_config::TEXT || ':rules_v3'\n        ) AS current_config_hash\n\n    FROM saas.search_profiles AS profile\n\n    JOIN saas.organizations AS organization\n        ON organization.id =\n           profile.organization_id\n\n    WHERE profile.is_active = TRUE\n\n      AND organization.status IN (\n          'active',\n          'trial'\n      )\n),\n\nstate_upsert AS (\n    INSERT INTO\n        saas.search_profile_evaluation_state AS state (\n            profile_id,\n            config_hash,\n\n            cursor_timestamp,\n            cursor_process_id,\n\n            status,\n            metadata,\n\n            created_at,\n            updated_at\n        )\n\n    SELECT\n        profile.profile_id,\n        profile.current_config_hash,\n\n        '1970-01-01 00:00:00+00'\n            ::TIMESTAMPTZ,\n\n        '',\n\n        'ready',\n\n        jsonb_build_object(\n            'workflow_code',\n            'WF-005',\n\n            'profile_name',\n            profile.profile_name,\n\n            'initial_state_created_at',\n            NOW()\n        ),\n\n        NOW(),\n        NOW()\n\n    FROM active_profiles AS profile\n\n    ON CONFLICT (profile_id)\n    DO UPDATE SET\n        cursor_timestamp =\n            CASE\n                WHEN state.config_hash <>\n                     EXCLUDED.config_hash\n\n                    THEN\n                        '1970-01-01 00:00:00+00'\n                            ::TIMESTAMPTZ\n\n                ELSE\n                    state.cursor_timestamp\n            END,\n\n        cursor_process_id =\n            CASE\n                WHEN state.config_hash <>\n                     EXCLUDED.config_hash\n\n                    THEN ''\n\n                ELSE\n                    state.cursor_process_id\n            END,\n\n        status =\n            'ready',\n\n        config_hash =\n            EXCLUDED.config_hash,\n\n        last_error =\n            NULL,\n\n        metadata =\n            COALESCE(\n                state.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'workflow_code',\n                'WF-005',\n\n                'configuration_checked_at',\n                NOW(),\n\n                'configuration_changed',\n                state.config_hash <>\n                EXCLUDED.config_hash\n            ),\n\n        updated_at =\n            NOW()\n\n    RETURNING\n        state.profile_id,\n        state.config_hash,\n        state.cursor_timestamp,\n        state.cursor_process_id,\n        state.status\n)\n\nSELECT\n    profile.profile_id,\n    profile.organization_id,\n    profile.profile_name,\n    profile.filter_config,\n    profile.notification_config,\n\n    state.config_hash,\n    state.cursor_timestamp,\n    state.cursor_process_id,\n    state.status\n\nFROM active_profiles AS profile\n\nJOIN state_upsert AS state\n    ON state.profile_id =\n       profile.profile_id\n\nORDER BY\n    profile.profile_name ASC;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        0
+      ],
+      "id": "1b64e6b3-8256-479c-be79-b93361252e87",
+      "name": "Preparar perfiles activos WF-005",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "906de17a-a370-4197-8e38-f535fbe033df",
+              "leftValue": "={{ Boolean($json.profile_id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        224,
+        240
+      ],
+      "id": "f9ec33e1-dbf8-4824-8ce6-c97ab4f7ae72",
+      "name": "¿Hay perfiles activos WF-005?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH profile_data AS (\n    SELECT\n        profile.id AS profile_id,\n        profile.organization_id,\n        profile.name AS profile_name,\n\n        profile.filter_config,\n        COALESCE((SELECT to_jsonb(c) FROM saas.organization_capability_profiles c WHERE c.organization_id=profile.organization_id AND c.is_active=TRUE ORDER BY c.updated_at DESC LIMIT 1),'{}'::jsonb) AS capability,\n\n        COALESCE(\n            profile.filter_config\n                -> 'procurement_methods',\n            '[]'::JSONB\n        ) AS procurement_methods,\n\n        COALESCE(\n            profile.filter_config\n                -> 'process_statuses',\n            '[]'::JSONB\n        ) AS process_statuses,\n\n        COALESCE(\n            profile.filter_config\n                -> 'departments',\n            '[]'::JSONB\n        ) AS departments,\n\n        COALESCE(\n            profile.filter_config\n                -> 'cities',\n            '[]'::JSONB\n        ) AS cities,\n\n        COALESCE(\n            profile.filter_config\n                -> 'contract_types',\n            '[]'::JSONB\n        ) AS contract_types,\n\n        COALESCE(\n            profile.filter_config\n                -> 'unspsc_codes',\n            '[]'::JSONB\n        ) AS unspsc_codes,\n\n        COALESCE(\n            profile.filter_config\n                -> 'keywords_any',\n            '[]'::JSONB\n        ) AS keywords_any,\n\n        COALESCE(\n            profile.filter_config\n                -> 'keywords_all',\n            '[]'::JSONB\n        ) AS keywords_all,\n\n        COALESCE(\n            profile.filter_config\n                -> 'excluded_keywords',\n            '[]'::JSONB\n        ) AS excluded_keywords,\n\n        NULLIF(\n            profile.filter_config\n                ->> 'minimum_budget',\n            ''\n        )::NUMERIC AS minimum_budget,\n\n        NULLIF(\n            profile.filter_config\n                ->> 'maximum_budget',\n            ''\n        )::NUMERIC AS maximum_budget,\n\n        COALESCE(\n            NULLIF(\n                profile.filter_config\n                    ->> 'only_open',\n                ''\n            )::BOOLEAN,\n            FALSE\n        ) AS only_open,\n\n        state.cursor_timestamp,\n        state.cursor_process_id\n\n    FROM saas.search_profiles AS profile\n\n    JOIN saas.search_profile_evaluation_state\n        AS state\n        ON state.profile_id =\n           profile.id\n\n    WHERE profile.id =\n        $1::UUID\n\n      AND profile.is_active = TRUE\n),\n\ncandidate_processes AS (\n    SELECT\n        process.*,\n\n        CONCAT_WS(\n            ' ',\n            process.reference,\n            process.process_name,\n            process.description,\n            process.entity_name,\n            process.department,\n            process.city,\n            process.procurement_method,\n            process.contract_type\n        ) AS searchable_text\n\n    FROM secop.processes AS process\n\n    CROSS JOIN profile_data AS profile\n\n    WHERE (\n        process.updated_at >\n            profile.cursor_timestamp\n\n        OR (\n            process.updated_at =\n                profile.cursor_timestamp\n\n            AND process.id::TEXT >\n                profile.cursor_process_id\n        )\n    )\n\n    ORDER BY\n        process.updated_at ASC,\n        process.id::TEXT ASC\n\n    LIMIT 5000\n),\n\nmatching_processes AS (\n    SELECT\n        candidate.*,\n        profile.profile_id,\n        profile.organization_id,\n        profile.profile_name,\n        profile.filter_config,\n        saas.process_compatibility(to_jsonb(candidate),profile.capability,profile.filter_config) AS compatibility\n\n    FROM candidate_processes AS candidate\n\n    CROSS JOIN profile_data AS profile\n\n    WHERE saas.process_matches_filters(to_jsonb(candidate),profile.filter_config)\n),\n\narchived_matches AS (\n    UPDATE saas.process_matches AS match\n\n    SET\n        match_status =\n            'archived',\n\n        updated_at =\n            NOW(),\n\n        matched_reasons =\n            COALESCE(\n                match.matched_reasons,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'archived_reason',\n                'process_no_longer_matches_profile',\n\n                'archived_at',\n                NOW()\n            )\n\n    FROM\n        candidate_processes AS candidate,\n        profile_data AS profile\n\n    WHERE match.search_profile_id =\n        profile.profile_id\n\n      AND match.process_id =\n        candidate.id\n\n      AND match.match_status NOT IN (\n          'dismissed',\n          'archived'\n      )\n\n      AND NOT EXISTS (\n          SELECT 1\n\n          FROM matching_processes AS matching\n\n          WHERE matching.id =\n              candidate.id\n      )\n\n    RETURNING\n        match.id\n),\n\nupserted_matches AS (\n    INSERT INTO saas.process_matches AS match (\n        organization_id,\n        search_profile_id,\n        process_id,\n\n        match_score,\n        match_status,\n\n        matched_reasons,\n        process_snapshot,\n\n        first_matched_at,\n        last_matched_at,\n\n        created_at,\n        updated_at\n    )\n\n    SELECT\n        matching.organization_id,\n        matching.profile_id,\n        matching.id,\n\n        (matching.compatibility ->> 'score')::numeric,\n        'new',\n\n        jsonb_build_object(\n            'compatibility', matching.compatibility,\n            'profile_name',\n            matching.profile_name,\n\n            'filters',\n            matching.filter_config,\n\n            'matched_at',\n            NOW()\n        ),\n\n        jsonb_build_object(\n            'secop_process_id',\n            matching.secop_process_id,\n\n            'reference',\n            matching.reference,\n\n            'process_name',\n            matching.process_name,\n\n            'description',\n            matching.description,\n\n            'entity_name',\n            matching.entity_name,\n\n            'department',\n            matching.department,\n\n            'city',\n            matching.city,\n\n            'procurement_method',\n            matching.procurement_method,\n\n            'contract_type',\n            matching.contract_type,\n\n            'base_price',\n            matching.base_price,\n\n            'process_status',\n            matching.process_status,\n\n            'opening_status',\n            matching.opening_status,\n\n            'publication_date',\n            matching.publication_date,\n\n            'process_url',\n            matching.process_url\n        ),\n\n        NOW(),\n        NOW(),\n\n        NOW(),\n        NOW()\n\n    FROM matching_processes AS matching\n\n    ON CONFLICT (\n        search_profile_id,\n        process_id\n    )\n    DO UPDATE SET\n        match_score =\n            EXCLUDED.match_score,\n\n        match_status =\n            CASE\n                WHEN match.match_status =\n                    'dismissed'\n\n                    THEN 'dismissed'\n\n                WHEN match.match_status =\n                    'archived'\n\n                    THEN 'new'\n\n                ELSE\n                    match.match_status\n            END,\n\n        matched_reasons =\n            EXCLUDED.matched_reasons,\n\n        process_snapshot =\n            EXCLUDED.process_snapshot,\n\n        last_matched_at =\n            NOW(),\n\n        updated_at =\n            NOW()\n\n    RETURNING\n        (\n            xmax = 0\n        ) AS was_inserted\n),\n\nlast_candidate AS (\n    SELECT\n        candidate.updated_at,\n        candidate.id::TEXT\n            AS process_id_text\n\n    FROM candidate_processes AS candidate\n\n    ORDER BY\n        candidate.updated_at DESC,\n        candidate.id::TEXT DESC\n\n    LIMIT 1\n),\n\nevaluation_summary AS (\n    SELECT\n        (\n            SELECT COUNT(*)\n            FROM candidate_processes\n        ) AS evaluated_count,\n\n        (\n            SELECT COUNT(*)\n            FROM matching_processes\n        ) AS matching_count,\n\n        (\n            SELECT COUNT(*)\n            FROM upserted_matches\n            WHERE was_inserted = TRUE\n        ) AS created_count,\n\n        (\n            SELECT COUNT(*)\n            FROM upserted_matches\n            WHERE was_inserted = FALSE\n        ) AS updated_count,\n\n        (\n            SELECT COUNT(*)\n            FROM archived_matches\n        ) AS archived_count,\n\n        (\n            SELECT updated_at\n            FROM last_candidate\n        ) AS last_cursor_timestamp,\n\n        (\n            SELECT process_id_text\n            FROM last_candidate\n        ) AS last_cursor_process_id\n),\n\nstate_updated AS (\n    UPDATE saas.search_profile_evaluation_state\n        AS state\n\n    SET\n        cursor_timestamp =\n            COALESCE(\n                summary.last_cursor_timestamp,\n                state.cursor_timestamp\n            ),\n\n        cursor_process_id =\n            COALESCE(\n                summary.last_cursor_process_id,\n                state.cursor_process_id\n            ),\n\n        status =\n            'success',\n\n        last_run_at =\n            NOW(),\n\n        last_success_at =\n            NOW(),\n\n        records_evaluated =\n            state.records_evaluated\n            + summary.evaluated_count,\n\n        matches_created =\n            state.matches_created\n            + summary.created_count,\n\n        matches_updated =\n            state.matches_updated\n            + summary.updated_count,\n\n        matches_archived =\n            state.matches_archived\n            + summary.archived_count,\n\n        last_error =\n            NULL,\n\n        metadata =\n            COALESCE(\n                state.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'workflow_code',\n                'WF-005',\n\n                'last_evaluated_count',\n                summary.evaluated_count,\n\n                'last_matching_count',\n                summary.matching_count,\n\n                'last_created_count',\n                summary.created_count,\n\n                'last_updated_count',\n                summary.updated_count,\n\n                'last_archived_count',\n                summary.archived_count,\n\n                'last_evaluated_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM evaluation_summary AS summary\n\n    WHERE state.profile_id =\n        $2::UUID\n\n    RETURNING\n        state.profile_id,\n        state.cursor_timestamp,\n        state.cursor_process_id,\n        state.status,\n\n        state.records_evaluated,\n        state.matches_created,\n        state.matches_updated,\n        state.matches_archived,\n        state.metadata\n)\n\nSELECT\n    profile.organization_id,\n    profile.name AS profile_name,\n\n    state.profile_id,\n    state.status,\n\n    state.cursor_timestamp,\n    state.cursor_process_id,\n\n    state.records_evaluated,\n    state.matches_created,\n    state.matches_updated,\n    state.matches_archived,\n\n    state.metadata\n        ->> 'last_evaluated_count'\n        AS last_evaluated_count,\n\n    state.metadata\n        ->> 'last_matching_count'\n        AS last_matching_count,\n\n    state.metadata\n        ->> 'last_created_count'\n        AS last_created_count,\n\n    state.metadata\n        ->> 'last_updated_count'\n        AS last_updated_count,\n\n    state.metadata\n        ->> 'last_archived_count'\n        AS last_archived_count,\n\n    $3::BIGINT\n        AS evaluation_cycles,\n\n    $4::BIGINT\n    +\n    COALESCE(\n        NULLIF(\n            state.metadata\n                ->> 'last_evaluated_count',\n            ''\n        )::BIGINT,\n        0\n    ) AS current_profile_records,\n\n    $5::BIGINT\n    +\n    COALESCE(\n        NULLIF(\n            state.metadata\n                ->> 'last_created_count',\n            ''\n        )::BIGINT,\n        0\n    ) AS current_profile_matches_created,\n\n    $6::BIGINT\n    +\n    COALESCE(\n        NULLIF(\n            state.metadata\n                ->> 'last_updated_count',\n            ''\n        )::BIGINT,\n        0\n    ) AS current_profile_matches_updated,\n\n    $7::BIGINT\n    +\n    COALESCE(\n        NULLIF(\n            state.metadata\n                ->> 'last_archived_count',\n            ''\n        )::BIGINT,\n        0\n    ) AS current_profile_matches_archived\n\nFROM state_updated AS state\n\nJOIN saas.search_profiles AS profile\n    ON profile.id =\n       state.profile_id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.profile_id, $json.profile_id, Number($json.evaluation_cycles ?? 0) + 1, Number($json.current_profile_records ?? 0), Number($json.current_profile_matches_created ?? 0), Number($json.current_profile_matches_updated ?? 0), Number($json.current_profile_matches_archived ?? 0) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        -176
+      ],
+      "id": "2ee030d6-61d0-42c9-9b11-e0a4e83d5602",
+      "name": "Evaluar perfil WF-005",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f44bb97a-b73a-4bea-a248-636ead87d53b",
+              "leftValue": "={{ Number($json.last_evaluated_count ?? 0) }}",
+              "rightValue": "={{ 5000 }}",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "4f0c2cf5-f72c-44a7-80cf-e19389ea6468",
+              "leftValue": "={{ Number($json.evaluation_cycles ?? 0) }}",
+              "rightValue": "={{ 60 }}",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        240,
+        -176
+      ],
+      "id": "6a71344c-d3a7-4227-91b5-e93eee60f9af",
+      "name": "¿Hay otro bloque WF-005?"
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        704,
+        32
+      ],
+      "id": "e3038137-c6be-4e00-8fb9-f3ab49541eca",
+      "name": "Wait",
+      "webhookId": "499ecd53-bc4f-4056-9c24-9d89610374e1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "closure-reason",
+              "name": "completion_reason",
+              "value": "={{ Number($json.last_evaluated_count ?? 0) < 5000 ? 'caught_up' : 'safety_limit_reached' }}",
+              "type": "string"
+            },
+            {
+              "id": "closure-count",
+              "name": "final_block_evaluated",
+              "value": "={{ Number($json.last_evaluated_count ?? 0) }}",
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        656,
+        -160
+      ],
+      "id": "715f6e27-0a09-423f-849b-391e3625c3ba",
+      "name": "Preparar cierre de perfil WF-005"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH state_finished AS (\n    UPDATE saas.search_profile_evaluation_state\n        AS state\n\n    SET\n        status =\n            'success',\n\n        last_success_at =\n            NOW(),\n\n        last_error =\n            NULL,\n\n        metadata =\n            COALESCE(\n                state.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'workflow_code',\n                'WF-005',\n\n                'last_completion_reason',\n                $1::TEXT,\n\n                'last_evaluation_cycles',\n                $2::BIGINT,\n\n                'last_final_block_evaluated',\n                $3::BIGINT,\n\n                'last_profile_records_evaluated',\n                $4::BIGINT,\n\n                'last_profile_matches_created',\n                $5::BIGINT,\n\n                'last_profile_matches_updated',\n                $6::BIGINT,\n\n                'last_profile_matches_archived',\n                $7::BIGINT,\n\n                'last_completed_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    WHERE state.profile_id =\n        $8::UUID\n\n    RETURNING\n        state.profile_id,\n        state.status,\n\n        state.cursor_timestamp,\n        state.cursor_process_id,\n\n        state.records_evaluated,\n        state.matches_created,\n        state.matches_updated,\n        state.matches_archived,\n\n        state.last_run_at,\n        state.last_success_at,\n        state.metadata\n),\n\nprofile_finished AS (\n    UPDATE saas.search_profiles\n        AS profile\n\n    SET\n        last_evaluated_at =\n            NOW(),\n\n        updated_at =\n            NOW()\n\n    FROM state_finished AS state\n\n    WHERE profile.id =\n        state.profile_id\n\n    RETURNING\n        profile.id,\n        profile.organization_id,\n        profile.name,\n        profile.last_evaluated_at\n)\n\nSELECT\n    profile_finished.id\n        AS profile_id,\n\n    profile_finished.organization_id,\n\n    profile_finished.name\n        AS profile_name,\n\n    REPLACE(\n        profile_finished.name,\n        '''',\n        ''''''\n    ) AS profile_name_sql,\n\n    state_finished.status,\n\n    state_finished.cursor_timestamp,\n    state_finished.cursor_process_id,\n\n    state_finished.records_evaluated,\n    state_finished.matches_created,\n    state_finished.matches_updated,\n    state_finished.matches_archived,\n\n    $9::TEXT\n        AS completion_reason,\n\n    $10::BIGINT\n        AS evaluation_cycles,\n\n    $11::BIGINT\n        AS current_profile_records,\n\n    $12::BIGINT\n        AS current_profile_matches_created,\n\n    $13::BIGINT\n        AS current_profile_matches_updated,\n\n    $14::BIGINT\n        AS current_profile_matches_archived,\n\n    state_finished.last_run_at,\n    state_finished.last_success_at,\n\n    profile_finished.last_evaluated_at,\n\n    state_finished.metadata\n\nFROM state_finished\n\nJOIN profile_finished\n    ON profile_finished.id =\n       state_finished.profile_id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.completion_reason, Number($json.evaluation_cycles ?? 0), Number($json.final_block_evaluated ?? 0), Number($json.current_profile_records ?? 0), Number($json.current_profile_matches_created ?? 0), Number($json.current_profile_matches_updated ?? 0), Number($json.current_profile_matches_archived ?? 0), $json.profile_id, $json.completion_reason, Number($json.evaluation_cycles ?? 0), Number($json.current_profile_records ?? 0), Number($json.current_profile_matches_created ?? 0), Number($json.current_profile_matches_updated ?? 0), Number($json.current_profile_matches_archived ?? 0) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        864,
+        -160
+      ],
+      "id": "14419497-d479-4097-9db0-3afe3fffd401",
+      "name": "Finalizar perfil WF-005",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        464,
+        224
+      ],
+      "id": "be1e6afe-e081-4f5e-b471-51c022d01064",
+      "name": "Procesar perfiles uno a uno WF-005"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -592,
+        -96
+      ],
+      "id": "58c6f4ff-2d5f-43ef-8d26-fcfc3af70087",
+      "name": "Inicio Manual WF-005"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ops.sync_cursors AS cursor\n\nSET\n    active_execution_id =\n        $1::TEXT,\n\n    lock_acquired_at =\n        NOW(),\n\n    lock_expires_at =\n        NOW() + INTERVAL '60 minutes',\n\n    status =\n        'running',\n\n    last_run_at =\n        NOW(),\n\n    error_message =\n        NULL,\n\n    metadata =\n        COALESCE(\n            cursor.metadata,\n            '{}'::JSONB\n        )\n        || jsonb_build_object(\n            'workflow_code',\n            'WF-005',\n\n            'current_execution_id',\n            $2::TEXT,\n\n            'current_execution_profiles',\n            0,\n\n            'current_execution_blocks',\n            0,\n\n            'current_execution_records',\n            0,\n\n            'current_execution_matches',\n            0,\n\n            'current_execution_started_at',\n            NOW(),\n\n            'multi_organization_enabled',\n            TRUE\n        ),\n\n    updated_at =\n        NOW()\n\nWHERE cursor.source_code =\n    'SECOP_II_PROFILE_MATCHES'\n\n  AND (\n      cursor.active_execution_id IS NULL\n\n      OR cursor.lock_expires_at IS NULL\n\n      OR cursor.lock_expires_at <= NOW()\n\n      OR cursor.active_execution_id::TEXT =\n          $3::TEXT\n  )\n\nRETURNING\n    cursor.source_code,\n    cursor.cursor_timestamp,\n    cursor.cursor_process_id,\n\n    cursor.active_execution_id,\n    cursor.lock_acquired_at,\n    cursor.lock_expires_at,\n\n    cursor.status,\n    cursor.records_processed,\n    cursor.metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.id, $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -400,
+        16
+      ],
+      "id": "a1a85328-7c00-4f5b-aa49-59eb068bb251",
+      "name": "Adquirir bloqueo WF-005",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c8a104e8-e132-40fb-b57e-6489b7341b10",
+              "leftValue": "={{ String($json.active_execution_id || '') === String($execution.id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -240,
+        16
+      ],
+      "id": "e9c16760-4f2f-44b8-b3a2-ac394f2c8794",
+      "name": "¿Bloqueo WF-005 adquirido?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs (\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n\n    started_at,\n\n    cursor_start_timestamp,\n    cursor_start_process_id,\n\n    metadata,\n\n    created_at,\n    updated_at\n)\nVALUES (\n    'WF-005',\n\n    'SECOP_II_PROFILE_MATCHES',\n\n    $1::TEXT,\n\n    $2::TEXT,\n\n    'running',\n\n    NOW(),\n\n    NULLIF(\n        $3::TEXT,\n        ''\n    )::TIMESTAMPTZ,\n\n    NULLIF(\n        $4::TEXT,\n        ''\n    ),\n\n    jsonb_build_object(\n        'workflow_name',\n        'WF-005 - Motor de perfiles y coincidencias SECOP II',\n\n        'multi_organization_enabled',\n        TRUE,\n\n        'evaluation_block_size',\n        500,\n\n        'maximum_blocks_per_profile',\n        20,\n\n        'lock_acquired_at',\n        NULLIF(\n            $5::TEXT,\n            ''\n        )::TIMESTAMPTZ,\n\n        'lock_expires_at',\n        NULLIF(\n            $6::TEXT,\n            ''\n        )::TIMESTAMPTZ\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (n8n_execution_id)\nDO UPDATE SET\n    workflow_code =\n        'WF-005',\n\n    source_code =\n        'SECOP_II_PROFILE_MATCHES',\n\n    status =\n        'running',\n\n    finished_at =\n        NULL,\n\n    completion_reason =\n        NULL,\n\n    error_node =\n        NULL,\n\n    error_message =\n        NULL,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    id,\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.mode ?? \"unknown\", $json.cursor_timestamp ?? \"\", $json.cursor_process_id ?? \"\", $json.lock_acquired_at ?? \"\", $json.lock_expires_at ?? \"\" ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        0
+      ],
+      "id": "0c6e738a-7211-490b-ab2b-dbc452a67f3b",
+      "name": " Registrar inicio WF-005",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs (\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n\n    started_at,\n    finished_at,\n\n    completion_reason,\n    metadata,\n\n    created_at,\n    updated_at\n)\n\nSELECT\n    'WF-005',\n\n    'SECOP_II_PROFILE_MATCHES',\n\n    $1::TEXT,\n\n    $2::TEXT,\n\n    'skipped',\n\n    NOW(),\n    NOW(),\n\n    'concurrent_execution',\n\n    jsonb_build_object(\n        'reason',\n        'Otra ejecución del WF-005 tiene un bloqueo vigente',\n\n        'attempted_execution_id',\n        $3::TEXT,\n\n        'blocking_execution_id',\n        cursor.active_execution_id,\n\n        'lock_acquired_at',\n        cursor.lock_acquired_at,\n\n        'lock_expires_at',\n        cursor.lock_expires_at,\n\n        'registered_at',\n        NOW()\n    ),\n\n    NOW(),\n    NOW()\n\nFROM ops.sync_cursors AS cursor\n\nWHERE cursor.source_code =\n    'SECOP_II_PROFILE_MATCHES'\n\nON CONFLICT (n8n_execution_id)\nDO UPDATE SET\n    status =\n        'skipped',\n\n    finished_at =\n        NOW(),\n\n    completion_reason =\n        'concurrent_execution',\n\n    metadata =\n        COALESCE(\n            ops.workflow_runs.metadata,\n            '{}'::JSONB\n        )\n        || EXCLUDED.metadata,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    id,\n    workflow_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    finished_at,\n    completion_reason,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.mode ?? \"unknown\", $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        464
+      ],
+      "id": "a830e5d4-803b-4aa3-914a-e9e375e3a4d4",
+      "name": "Registrar ejecución omitida WF-005",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH cursor_updated AS (\n    UPDATE ops.sync_cursors AS cursor\n\n    SET\n        status =\n            'running',\n\n        last_run_at =\n            NOW(),\n\n        lock_expires_at =\n            NOW() + INTERVAL '60 minutes',\n\n        records_processed =\n            COALESCE(\n                cursor.records_processed,\n                0\n            )\n            + $1::BIGINT,\n\n        error_message =\n            NULL,\n\n        metadata =\n            COALESCE(\n                cursor.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'workflow_code',\n                'WF-005',\n\n                'current_execution_id',\n                $2::TEXT,\n\n                'current_execution_profiles',\n                COALESCE(\n                    NULLIF(\n                        cursor.metadata\n                            ->> 'current_execution_profiles',\n                        ''\n                    )::INTEGER,\n                    0\n                ) + 1,\n\n                'current_execution_blocks',\n                COALESCE(\n                    NULLIF(\n                        cursor.metadata\n                            ->> 'current_execution_blocks',\n                        ''\n                    )::BIGINT,\n                    0\n                )\n                + $3::BIGINT,\n\n                'current_execution_records',\n                COALESCE(\n                    NULLIF(\n                        cursor.metadata\n                            ->> 'current_execution_records',\n                        ''\n                    )::BIGINT,\n                    0\n                )\n                + $4::BIGINT,\n\n                'current_execution_matches',\n                COALESCE(\n                    NULLIF(\n                        cursor.metadata\n                            ->> 'current_execution_matches',\n                        ''\n                    )::BIGINT,\n                    0\n                )\n                + $5::BIGINT,\n\n                'current_execution_matches_updated',\n                COALESCE(\n                    NULLIF(\n                        cursor.metadata\n                            ->> 'current_execution_matches_updated',\n                        ''\n                    )::BIGINT,\n                    0\n                )\n                + $6::BIGINT,\n\n                'current_execution_matches_archived',\n                COALESCE(\n                    NULLIF(\n                        cursor.metadata\n                            ->> 'current_execution_matches_archived',\n                        ''\n                    )::BIGINT,\n                    0\n                )\n                + $7::BIGINT,\n\n                'last_profile_id',\n                $8::TEXT,\n\n                'last_profile_name',\n                $9::TEXT,\n\n                'last_profile_completion_reason',\n                $10::TEXT,\n\n                'last_profile_records_evaluated',\n                $11::BIGINT,\n\n                'last_profile_matches_created',\n                $12::BIGINT,\n\n                'last_profile_matches_updated',\n                $13::BIGINT,\n\n                'last_profile_matches_archived',\n                $14::BIGINT,\n\n                'last_profile_evaluation_cycles',\n                $15::BIGINT,\n\n                'last_profile_completed_at',\n                NOW(),\n\n                'lock_renewed_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    WHERE cursor.source_code =\n        'SECOP_II_PROFILE_MATCHES'\n\n      AND cursor.active_execution_id::TEXT =\n        $16::TEXT\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n\n        cursor.records_processed,\n        cursor.metadata,\n        cursor.updated_at\n),\n\nrun_updated AS (\n    UPDATE ops.workflow_runs AS run\n\n    SET\n        batches_processed =\n            COALESCE(\n                run.batches_processed,\n                0\n            )\n            + $17::BIGINT,\n\n        records_read =\n            COALESCE(\n                run.records_read,\n                0\n            )\n            + $18::BIGINT,\n\n        records_written =\n            COALESCE(\n                run.records_written,\n                0\n            )\n            + $19::BIGINT,\n\n        metadata =\n            COALESCE(\n                run.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'profiles_processed',\n                cursor_updated.metadata\n                    -> 'current_execution_profiles',\n\n                'last_profile_id',\n                $20::TEXT,\n\n                'last_profile_name',\n                $21::TEXT,\n\n                'last_profile_completion_reason',\n                $22::TEXT,\n\n                'last_profile_evaluation_cycles',\n                $23::BIGINT,\n\n                'last_profile_records_evaluated',\n                $24::BIGINT,\n\n                'last_profile_matches_created',\n                $25::BIGINT,\n\n                'last_profile_matches_updated',\n                $26::BIGINT,\n\n                'last_profile_matches_archived',\n                $27::BIGINT,\n\n                'last_profile_completed_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM cursor_updated\n\n    WHERE run.n8n_execution_id =\n        $28::TEXT\n\n      AND run.workflow_code =\n        'WF-005'\n\n      AND run.status =\n        'running'\n\n    RETURNING\n        run.id,\n        run.n8n_execution_id,\n        run.status,\n\n        run.batches_processed,\n        run.records_read,\n        run.records_written,\n\n        run.metadata,\n        run.updated_at\n)\n\nSELECT\n    cursor_updated.source_code,\n    cursor_updated.status,\n\n    cursor_updated.active_execution_id,\n    cursor_updated.lock_acquired_at,\n    cursor_updated.lock_expires_at,\n\n    cursor_updated.records_processed,\n    cursor_updated.metadata,\n\n    run_updated.id\n        AS workflow_run_id,\n\n    run_updated.n8n_execution_id,\n    run_updated.status\n        AS workflow_run_status,\n\n    run_updated.batches_processed,\n    run_updated.records_read,\n    run_updated.records_written,\n\n    run_updated.updated_at\n        AS workflow_run_updated_at\n\nFROM cursor_updated\n\nLEFT JOIN run_updated\n    ON TRUE;",
+        "options": {
+          "queryReplacement": "={{ [ Number($json.current_profile_records ?? 0), $execution.id, Number($json.evaluation_cycles ?? 0), Number($json.current_profile_records ?? 0), Number($json.current_profile_matches_created ?? 0), Number($json.current_profile_matches_updated ?? 0), Number($json.current_profile_matches_archived ?? 0), $json.profile_id, String($json.profile_name ?? \"\"), $json.completion_reason, Number($json.current_profile_records ?? 0), Number($json.current_profile_matches_created ?? 0), Number($json.current_profile_matches_updated ?? 0), Number($json.current_profile_matches_archived ?? 0), Number($json.evaluation_cycles ?? 0), $execution.id, Number($json.evaluation_cycles ?? 0), Number($json.current_profile_records ?? 0), Number($json.current_profile_matches_created ?? 0), $json.profile_id, String($json.profile_name ?? \"\"), $json.completion_reason, Number($json.evaluation_cycles ?? 0), Number($json.current_profile_records ?? 0), Number($json.current_profile_matches_created ?? 0), Number($json.current_profile_matches_updated ?? 0), Number($json.current_profile_matches_archived ?? 0), $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        464,
+        16
+      ],
+      "id": "10c2020c-a41f-429b-b337-700af2c2fcb2",
+      "name": "Actualizar ejecución global WF-005",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "maxItems": 1
+      },
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        720,
+        208
+      ],
+      "id": "8feb2b52-01dd-4e0c-9a6f-470f1d50b2f6",
+      "name": "Preparar cierre global WF-005"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH execution_totals AS (\n    SELECT\n        cursor.source_code,\n        cursor.active_execution_id,\n\n        COALESCE(\n            NULLIF(\n                cursor.metadata\n                    ->> 'current_execution_profiles',\n                ''\n            )::BIGINT,\n            0\n        ) AS profiles_processed,\n\n        COALESCE(\n            NULLIF(\n                cursor.metadata\n                    ->> 'current_execution_blocks',\n                ''\n            )::BIGINT,\n            0\n        ) AS blocks_processed,\n\n        COALESCE(\n            NULLIF(\n                cursor.metadata\n                    ->> 'current_execution_records',\n                ''\n            )::BIGINT,\n            0\n        ) AS records_evaluated,\n\n        COALESCE(\n            NULLIF(\n                cursor.metadata\n                    ->> 'current_execution_matches',\n                ''\n            )::BIGINT,\n            0\n        ) AS matches_created,\n\n        COALESCE(\n            NULLIF(\n                cursor.metadata\n                    ->> 'current_execution_matches_updated',\n                ''\n            )::BIGINT,\n            0\n        ) AS matches_updated,\n\n        COALESCE(\n            NULLIF(\n                cursor.metadata\n                    ->> 'current_execution_matches_archived',\n                ''\n            )::BIGINT,\n            0\n        ) AS matches_archived\n\n    FROM ops.sync_cursors AS cursor\n\n    WHERE cursor.source_code =\n        'SECOP_II_PROFILE_MATCHES'\n\n      AND cursor.active_execution_id::TEXT =\n        $1::TEXT\n),\n\ncursor_finished AS (\n    UPDATE ops.sync_cursors AS cursor\n\n    SET\n        status =\n            'success',\n\n        active_execution_id =\n            NULL,\n\n        lock_acquired_at =\n            NULL,\n\n        lock_expires_at =\n            NULL,\n\n        error_message =\n            NULL,\n\n        metadata =\n            (\n                COALESCE(\n                    cursor.metadata,\n                    '{}'::JSONB\n                )\n\n                - 'current_execution_id'\n                - 'current_execution_profiles'\n                - 'current_execution_blocks'\n                - 'current_execution_records'\n                - 'current_execution_matches'\n                - 'current_execution_matches_updated'\n                - 'current_execution_matches_archived'\n                - 'current_execution_started_at'\n                - 'lock_renewed_at'\n            )\n            || jsonb_build_object(\n                'workflow_code',\n                'WF-005',\n\n                'last_execution_id',\n                $2::TEXT,\n\n                'last_execution_status',\n                'success',\n\n                'last_execution_completion_reason',\n                CASE\n                    WHEN totals.profiles_processed = 0\n                        THEN 'no_active_profiles'\n\n                    ELSE 'completed'\n                END,\n\n                'last_execution_profiles',\n                totals.profiles_processed,\n\n                'last_execution_blocks',\n                totals.blocks_processed,\n\n                'last_execution_records',\n                totals.records_evaluated,\n\n                'last_execution_matches_created',\n                totals.matches_created,\n\n                'last_execution_matches_updated',\n                totals.matches_updated,\n\n                'last_execution_matches_archived',\n                totals.matches_archived,\n\n                'last_execution_finished_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM execution_totals AS totals\n\n    WHERE cursor.source_code =\n        totals.source_code\n\n      AND cursor.active_execution_id::TEXT =\n        $3::TEXT\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n\n        cursor.records_processed,\n        cursor.metadata,\n        cursor.updated_at\n),\n\nrun_finished AS (\n    UPDATE ops.workflow_runs AS run\n\n    SET\n        status =\n            'success',\n\n        finished_at =\n            NOW(),\n\n        completion_reason =\n            COALESCE(\n                cursor_finished.metadata\n                    ->> 'last_execution_completion_reason',\n                'completed'\n            ),\n\n        metadata =\n            COALESCE(\n                run.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'workflow_code',\n                'WF-005',\n\n                'profiles_processed',\n                COALESCE(\n                    NULLIF(\n                        cursor_finished.metadata\n                            ->> 'last_execution_profiles',\n                        ''\n                    )::BIGINT,\n                    0\n                ),\n\n                'blocks_processed',\n                COALESCE(\n                    NULLIF(\n                        cursor_finished.metadata\n                            ->> 'last_execution_blocks',\n                        ''\n                    )::BIGINT,\n                    0\n                ),\n\n                'records_evaluated',\n                COALESCE(\n                    NULLIF(\n                        cursor_finished.metadata\n                            ->> 'last_execution_records',\n                        ''\n                    )::BIGINT,\n                    0\n                ),\n\n                'matches_created',\n                COALESCE(\n                    NULLIF(\n                        cursor_finished.metadata\n                            ->> 'last_execution_matches_created',\n                        ''\n                    )::BIGINT,\n                    0\n                ),\n\n                'matches_updated',\n                COALESCE(\n                    NULLIF(\n                        cursor_finished.metadata\n                            ->> 'last_execution_matches_updated',\n                        ''\n                    )::BIGINT,\n                    0\n                ),\n\n                'matches_archived',\n                COALESCE(\n                    NULLIF(\n                        cursor_finished.metadata\n                            ->> 'last_execution_matches_archived',\n                        ''\n                    )::BIGINT,\n                    0\n                ),\n\n                'finished_at',\n                NOW(),\n\n                'lock_released',\n                TRUE\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM cursor_finished\n\n    WHERE run.n8n_execution_id =\n        $4::TEXT\n\n      AND run.workflow_code =\n        'WF-005'\n\n      AND run.status =\n        'running'\n\n    RETURNING\n        run.id,\n        run.workflow_code,\n        run.source_code,\n        run.n8n_execution_id,\n\n        run.status,\n        run.started_at,\n        run.finished_at,\n\n        run.completion_reason,\n\n        run.batches_processed,\n        run.records_read,\n        run.records_written,\n\n        run.metadata,\n        run.updated_at\n)\n\nSELECT\n    cursor_finished.source_code,\n\n    cursor_finished.status\n        AS cursor_status,\n\n    cursor_finished.active_execution_id,\n    cursor_finished.lock_acquired_at,\n    cursor_finished.lock_expires_at,\n\n    cursor_finished.records_processed,\n\n    cursor_finished.metadata\n        ->> 'last_execution_completion_reason'\n        AS completion_reason,\n\n    cursor_finished.metadata\n        ->> 'last_execution_profiles'\n        AS profiles_processed,\n\n    cursor_finished.metadata\n        ->> 'last_execution_blocks'\n        AS blocks_processed,\n\n    cursor_finished.metadata\n        ->> 'last_execution_records'\n        AS records_evaluated,\n\n    cursor_finished.metadata\n        ->> 'last_execution_matches_created'\n        AS matches_created,\n\n    cursor_finished.metadata\n        ->> 'last_execution_matches_updated'\n        AS matches_updated,\n\n    cursor_finished.metadata\n        ->> 'last_execution_matches_archived'\n        AS matches_archived,\n\n    run_finished.id\n        AS workflow_run_id,\n\n    run_finished.n8n_execution_id,\n\n    run_finished.status\n        AS workflow_run_status,\n\n    run_finished.started_at,\n    run_finished.finished_at,\n\n    run_finished.batches_processed,\n    run_finished.records_read,\n    run_finished.records_written,\n\n    run_finished.updated_at\n        AS workflow_run_updated_at\n\nFROM cursor_finished\n\nLEFT JOIN run_finished\n    ON TRUE;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.id, $execution.id, $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        928,
+        208
+      ],
+      "id": "5c770edd-e08a-4701-839c-c67f09f4103f",
+      "name": "Finalizar ejecución global WF-005",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "requested_by_user_id"
+            },
+            {
+              "name": "process_id"
+            },
+            {
+              "name": "processing_mode"
+            },
+            {
+              "name": "orchestration_execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -640,
+        352
+      ],
+      "id": "143ec38e-d480-402c-b04f-47f8f4656022",
+      "name": "When Executed by Another Workflow"
+    }
+  ],
+  "connections": {
+    "Preparar perfiles activos WF-005": {
+      "main": [
+        [
+          {
+            "node": "¿Hay perfiles activos WF-005?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay perfiles activos WF-005?": {
+      "main": [
+        [
+          {
+            "node": "Procesar perfiles uno a uno WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar cierre global WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluar perfil WF-005": {
+      "main": [
+        [
+          {
+            "node": "¿Hay otro bloque WF-005?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay otro bloque WF-005?": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar cierre de perfil WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Evaluar perfil WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar cierre de perfil WF-005": {
+      "main": [
+        [
+          {
+            "node": "Finalizar perfil WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar perfiles uno a uno WF-005": {
+      "main": [
+        [
+          {
+            "node": "Preparar cierre global WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluar perfil WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalizar perfil WF-005": {
+      "main": [
+        [
+          {
+            "node": "Actualizar ejecución global WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inicio Manual WF-005": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adquirir bloqueo WF-005": {
+      "main": [
+        [
+          {
+            "node": "¿Bloqueo WF-005 adquirido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Bloqueo WF-005 adquirido?": {
+      "main": [
+        [
+          {
+            "node": " Registrar inicio WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar ejecución omitida WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    " Registrar inicio WF-005": {
+      "main": [
+        [
+          {
+            "node": "Preparar perfiles activos WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Actualizar ejecución global WF-005": {
+      "main": [
+        [
+          {
+            "node": "Procesar perfiles uno a uno WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar cierre global WF-005": {
+      "main": [
+        [
+          {
+            "node": "Finalizar ejecución global WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-005",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "CernoIAProdWF007",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Bogota",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  }
+}

@@ -1,0 +1,1013 @@
+{
+  "id": "CernoIAProdWF014",
+  "name": "[CernoIA PROD] WF-014 - Extracción documental de oportunidades SECOP II",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS (\n    SELECT\n        COALESCE(\n            NULLIF(\n                $1::TEXT,\n                ''\n            ),\n            'all'\n        ) AS processing_mode,\n\n        LEAST(\n            GREATEST(\n                COALESCE(\n                    $2::INTEGER,\n                    5\n                ),\n                1\n            ),\n            5\n        ) AS batch_size\n),\n\ncandidates AS (\n    SELECT\n        document.id,\n\n        route.processing_route,\n\n        CASE route.processing_route\n            WHEN 'office_conversion'\n                THEN 0\n\n            WHEN 'pdf_text'\n                THEN 1\n\n            WHEN 'ocr'\n                THEN 2\n\n            ELSE 9\n        END AS route_priority\n\n    FROM saas.opportunity_documents\n        AS document\n\n    JOIN saas.organizations\n        AS organization\n        ON organization.id =\n           document.organization_id\n\n    CROSS JOIN parameters\n\n    CROSS JOIN LATERAL (\n        SELECT\n            CASE\n                WHEN LOWER(\n                    COALESCE(\n                        NULLIF(\n                            document.downloaded_file_extension,\n                            ''\n                        ),\n                        document.source_file_extension\n                    )\n                ) IN (\n                    'doc',\n                    'docx'\n                )\n\n                AND document.extraction_status IN (\n                    'unsupported',\n                    'failed'\n                )\n\n                AND COALESCE(\n                    document.metadata\n                        ->> 'requires_conversion',\n                    'false'\n                ) =\n                    'true'\n\n                AND COALESCE(\n                    document.metadata\n                        ->> 'conversion_status',\n                    'pending'\n                ) IN (\n                    'pending',\n                    'failed'\n                )\n\n                    THEN 'office_conversion'\n\n\n                WHEN LOWER(\n                    COALESCE(\n                        NULLIF(\n                            document.downloaded_file_extension,\n                            ''\n                        ),\n                        document.source_file_extension\n                    )\n                ) =\n                    'pdf'\n\n                AND document.extraction_status =\n                    'pending'\n\n                    THEN 'pdf_text'\n\n\n                WHEN LOWER(\n                    COALESCE(\n                        NULLIF(\n                            document.downloaded_file_extension,\n                            ''\n                        ),\n                        document.source_file_extension\n                    )\n                ) =\n                    'pdf'\n\n                AND document.extraction_status =\n                    'failed'\n\n                AND COALESCE(\n                    document.metadata\n                        ->> 'requires_ocr',\n                    'false'\n                ) =\n                    'true'\n\n                AND COALESCE(\n                    document.metadata\n                        ->> 'ocr_status',\n                    'pending'\n                ) IN (\n                    'pending',\n                    'failed'\n                )\n\n                    THEN 'ocr'\n\n                ELSE NULL\n            END AS processing_route\n    ) AS route\n\n    WHERE organization.status IN (\n        'active',\n        'trial'\n    )\n\n      AND document.download_status =\n          'downloaded'\n\n      AND document.extraction_attempt_count <\n          3\n\n      AND route.processing_route\n          IS NOT NULL\n\n      AND (\n          parameters.processing_mode =\n              'all'\n\n          OR (\n              parameters.processing_mode =\n                  'office_only'\n\n              AND route.processing_route =\n                  'office_conversion'\n          )\n\n          OR (\n              parameters.processing_mode =\n                  'pdf_only'\n\n              AND route.processing_route =\n                  'pdf_text'\n          )\n\n          OR (\n              parameters.processing_mode =\n                  'ocr_only'\n\n              AND route.processing_route =\n                  'ocr'\n          )\n      )\n\n    ORDER BY\n        route_priority,\n        document.updated_at ASC,\n        document.id ASC\n\n    FOR UPDATE OF document\n    SKIP LOCKED\n\n    LIMIT (\n        SELECT batch_size\n        FROM parameters\n    )\n),\n\nclaimed AS (\n    UPDATE saas.opportunity_documents\n        AS document\n\n    SET\n        extraction_status =\n            'running',\n\n        extraction_attempt_count =\n            document.extraction_attempt_count + 1,\n\n        last_extraction_attempt_at =\n            NOW(),\n\n        extraction_error =\n            NULL,\n\n        metadata =\n            COALESCE(\n                document.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'active_extraction_route',\n                candidate.processing_route,\n\n                'active_extraction_started_at',\n                NOW(),\n\n                'active_extraction_execution_id',\n                $3::TEXT\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM candidates\n        AS candidate\n\n    WHERE document.id =\n        candidate.id\n\n    RETURNING\n        document.id\n            AS opportunity_document_id,\n\n        document.organization_id,\n        document.opportunity_analysis_id,\n\n        document.process_id,\n        document.process_document_id,\n\n        document.process_reference,\n        document.document_name,\n\n        LOWER(\n            COALESCE(\n                NULLIF(\n                    document.downloaded_file_extension,\n                    ''\n                ),\n                NULLIF(\n                    document.source_file_extension,\n                    ''\n                ),\n                ''\n            )\n        ) AS file_extension,\n\n        document.source_download_url,\n\n        document.primary_category,\n        document.detected_categories,\n\n        document.download_sha256,\n        document.extraction_attempt_count,\n\n        candidate.processing_route,\n\n        document.metadata\n)\n\nSELECT *\nFROM claimed\n\nORDER BY\n    CASE processing_route\n        WHEN 'office_conversion'\n            THEN 0\n\n        WHEN 'pdf_text'\n            THEN 1\n\n        WHEN 'ocr'\n            THEN 2\n\n        ELSE 9\n    END,\n\n    process_reference,\n    document_name;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.processing_mode ?? \"all\",\n  Number($json.max_documents ?? 5),\n  String($execution.id ?? \"\")\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1056,
+        -16
+      ],
+      "id": "6b6246e6-c5fd-4460-b2e2-5e2e5e7f8611",
+      "name": "Tomar lote de extracción WF-014",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        64
+      ],
+      "id": "943a13cb-9aa9-4ca1-a470-72676ab6a87b",
+      "name": "Inicio Manual WF-014"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3749504d-e3ee-4012-a826-bda4973f0015",
+              "leftValue": "={{ Boolean($json.opportunity_document_id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1248,
+        -16
+      ],
+      "id": "35148c6c-9d2b-41ab-8d57-1db889b14220",
+      "name": "¿Hay documentos para extraer WF-014?"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1504,
+        -16
+      ],
+      "id": "8520d821-0d18-46ef-970d-4fffdd973947",
+      "name": "Procesar extracciones una a una WF-014"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ String($json.processing_route ?? \"\").trim() }}",
+                    "rightValue": "pdf_text",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "2a984a62-22cf-4887-9169-014707bb3e55"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "be96a074-2d23-4ae9-8cf3-98ad9ee5517a",
+                    "leftValue": "={{ String($json.processing_route ?? \"\").trim() }}",
+                    "rightValue": "office_conversion",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "916f50a5-3ee0-4081-a2af-a5aa60bb6add",
+                    "leftValue": "={{ String($json.processing_route ?? \"\").trim() }}",
+                    "rightValue": "ocr",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        2144,
+        48
+      ],
+      "id": "79da9fab-2ee0-4a96-b61d-50da7eb6b625",
+      "name": "Clasificar formato de extracción WF-014"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.source_download_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 180000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -400,
+        352
+      ],
+      "id": "54da3a67-99c2-4fdf-a6a4-d4eff7127dca",
+      "name": "Descargar PDF para extracción WF-014",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        -96,
+        336
+      ],
+      "id": "54f36701-0be6-4385-9442-bb55afffe516",
+      "name": "Extraer texto PDF WF-014"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const loopContext =\n  $(\"Procesar extracciones una a una WF-014\")\n    .item\n    .json\n  ?? {};\n\nconst extractorOutput =\n  $json\n  ?? {};\n\nconst candidates = [\n  extractorOutput.text,\n  extractorOutput.content,\n  extractorOutput.extracted_text,\n  extractorOutput.extractedText,\n  extractorOutput.data?.text,\n  extractorOutput.pdf?.text,\n];\n\nlet extractedText = '';\n\nfor (const candidate of candidates) {\n  if (\n    typeof candidate === 'string'\n    && candidate.trim().length > 0\n  ) {\n    extractedText =\n      candidate.trim();\n\n    break;\n  }\n}\n\nextractedText =\n  extractedText\n    .replace(/\\u0000/g, '')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/\\n{4,}/g, '\\n\\n\\n')\n    .trim();\n\nconst minimumUsefulLength =\n  100;\n\nconst extractionValid =\n  extractedText.length >=\n  minimumUsefulLength;\n\nconst rawPageCount =\n  extractorOutput.numpages\n  ?? extractorOutput.page_count\n  ?? extractorOutput.pages\n  ?? null;\n\nconst parsedPageCount =\n  Number(rawPageCount);\n\nconst pageCount =\n  Number.isFinite(parsedPageCount)\n  && parsedPageCount > 0\n    ? parsedPageCount\n    : null;\n\nreturn {\n  json: {\n    ...loopContext,\n    ...extractorOutput,\n\n    opportunity_document_id:\n      loopContext.opportunity_document_id,\n\n    organization_id:\n      loopContext.organization_id,\n\n    opportunity_analysis_id:\n      loopContext.opportunity_analysis_id,\n\n    process_id:\n      loopContext.process_id,\n\n    process_document_id:\n      loopContext.process_document_id,\n\n    process_reference:\n      loopContext.process_reference,\n\n    document_name:\n      loopContext.document_name,\n\n    file_extension:\n      String(\n        loopContext.file_extension\n        ?? ''\n      )\n        .trim()\n        .toLowerCase(),\n\n    primary_category:\n      loopContext.primary_category\n      ?? 'other',\n\n    extracted_text:\n      extractedText,\n\n    extracted_character_count:\n      extractedText.length,\n\n    extracted_page_count:\n      pageCount,\n\n    extraction_valid:\n      extractionValid,\n\n    extraction_error:\n      extractionValid\n        ? null\n        : 'El extractor no produjo texto suficiente. El PDF puede ser una imagen escaneada o estar protegido.',\n\n    extractor:\n      'n8n_extract_from_pdf',\n\n    extracted_at:\n      new Date().toISOString(),\n  },\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        944,
+        320
+      ],
+      "id": "afa4ad38-4fd1-47d1-a44f-667a00a49dd1",
+      "name": "Normalizar texto extraído WF-014"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        160,
+        320
+      ],
+      "id": "6a97f15a-a726-463e-9a57-0b49ba60c1fd",
+      "name": "Extraer texto PDF WF-14"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "02b1a146-a10c-479e-9d9a-054264797049",
+              "leftValue": "={{ $json.extraction_valid === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1152,
+        320
+      ],
+      "id": "f7710327-ab3f-4df7-ac35-cd36e96de1f5",
+      "name": "¿Extracción válida WF-014?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH extraction_saved AS (\n    INSERT INTO saas.opportunity_document_extractions (\n        opportunity_document_id,\n        extraction_version,\n\n        extractor,\n        extraction_status,\n\n        text_content,\n        text_sha256,\n\n        character_count,\n        page_count,\n\n        structured_content,\n        metadata,\n\n        created_at,\n        updated_at\n    )\n\n    VALUES (\n        $1::UUID,\n        1,\n\n        $2::TEXT,\n        'extracted',\n\n        $3::TEXT,\n\n        ENCODE(\n            DIGEST(\n                $3::TEXT,\n                'sha256'\n            ),\n            'hex'\n        ),\n\n        LENGTH(\n            $3::TEXT\n        ),\n\n        $4::INTEGER,\n\n        '{}'::JSONB,\n\n        COALESCE(\n            $7::JSONB,\n            '{}'::JSONB\n        ),\n\n        NOW(),\n        NOW()\n    )\n\n    ON CONFLICT (\n        opportunity_document_id,\n        extraction_version\n    )\n\n    DO UPDATE SET\n        extractor =\n            EXCLUDED.extractor,\n\n        extraction_status =\n            'extracted',\n\n        text_content =\n            EXCLUDED.text_content,\n\n        text_sha256 =\n            EXCLUDED.text_sha256,\n\n        character_count =\n            EXCLUDED.character_count,\n\n        page_count =\n            EXCLUDED.page_count,\n\n        extraction_error =\n            NULL,\n\n        metadata =\n            COALESCE(\n                saas.opportunity_document_extractions.metadata,\n                '{}'::JSONB\n            )\n            || EXCLUDED.metadata,\n\n        updated_at =\n            NOW()\n\n    RETURNING\n        id\n            AS extraction_id,\n\n        opportunity_document_id,\n\n        character_count,\n        page_count,\n        text_sha256\n),\n\ndocument_updated AS (\n    UPDATE saas.opportunity_documents\n        AS document\n\n    SET\n        extraction_status =\n            'extracted',\n\n        extracted_at =\n            NOW(),\n\n        extraction_error =\n            NULL,\n\n        ai_requirement_status =\n            'queued',\n\n        metadata =\n            COALESCE(\n                document.metadata,\n                '{}'::JSONB\n            )\n\n            || jsonb_build_object(\n                'last_extraction_route',\n                $5::TEXT,\n\n                'last_extractor',\n                $2::TEXT,\n\n                'last_extraction_workflow',\n                'WF-014',\n\n                'last_extraction_execution_id',\n                $6::TEXT,\n\n                'last_extraction_completed_at',\n                NOW()\n            )\n\n            || CASE\n                WHEN $5::TEXT =\n                    'office_conversion'\n\n                    THEN jsonb_build_object(\n                        'requires_conversion',\n                        FALSE,\n\n                        'conversion_status',\n                        'success',\n\n                        'conversion_completed_at',\n                        NOW(),\n\n                        'converted_format',\n                        'pdf'\n                    )\n\n                WHEN $5::TEXT =\n                    'ocr'\n\n                    THEN jsonb_build_object(\n                        'requires_ocr',\n                        FALSE,\n\n                        'ocr_status',\n                        'success',\n\n                        'ocr_completed_at',\n                        NOW()\n                    )\n\n                ELSE\n                    '{}'::JSONB\n            END,\n\n        updated_at =\n            NOW()\n\n    WHERE document.id =\n        $1::UUID\n\n    RETURNING\n        document.id,\n        document.organization_id,\n        document.opportunity_analysis_id,\n        document.process_id,\n\n        document.process_reference,\n        document.document_name,\n        document.primary_category,\n\n        document.extraction_status,\n        document.ai_requirement_status,\n\n        document.metadata\n)\n\nSELECT\n    document_updated.*,\n\n    extraction_saved.extraction_id,\n    extraction_saved.character_count,\n    extraction_saved.page_count,\n    extraction_saved.text_sha256,\n\n    $5::TEXT\n        AS processing_route\n\nFROM document_updated\n\nJOIN extraction_saved\n    ON extraction_saved.opportunity_document_id =\n       document_updated.id;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.opportunity_document_id,\n\n  $json.extractor\n    ?? \"n8n_extract_from_pdf\",\n\n  $json.extracted_text\n    ?? \"\",\n\n  Number(\n    $json.extracted_page_count\n    ?? 0\n  ) || null,\n\n  $json.processing_route\n    ?? \"pdf_text\",\n\n  String(\n    $execution.id\n    ?? \"\"\n  ),\n\n  JSON.stringify({\n    workflow_code:\n      \"WF-014\",\n\n    process_reference:\n      $json.process_reference\n      ?? null,\n\n    document_name:\n      $json.document_name\n      ?? null,\n\n    source_file_extension:\n      $json.file_extension\n      ?? null,\n\n    processing_route:\n      $json.processing_route\n      ?? \"pdf_text\",\n\n    extracted_at:\n      $json.extracted_at\n      ?? new Date().toISOString()\n  })\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1584,
+        304
+      ],
+      "id": "3c6c2e9d-50a2-428e-8b6e-b4ba69defa55",
+      "name": "Guardar texto extraído WF-014",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2192,
+        400
+      ],
+      "id": "b3319a89-0b41-4f7f-aab3-65d2a081bacc",
+      "name": "Wait",
+      "webhookId": "69bf7d1e-1433-44ad-b760-06a4e4b230a0"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE saas.opportunity_documents\nSET\n    extraction_status =\n        'failed',\n\n    extraction_error =\n        COALESCE(\n            NULLIF(\n                $2::TEXT,\n                ''\n            ),\n            'No fue posible extraer texto útil del archivo.'\n        ),\n\n    ai_requirement_status =\n        'not_requested',\n\n    metadata =\n        COALESCE(\n            metadata,\n            '{}'::JSONB\n        )\n        || jsonb_build_object(\n            'requires_ocr',\n            TRUE,\n\n            'extraction_route',\n            'ocr',\n\n            'ocr_status',\n            'pending',\n\n            'ocr_reason',\n            COALESCE(\n                NULLIF(\n                    $2::TEXT,\n                    ''\n                ),\n                'El extractor convencional no produjo texto.'\n            ),\n\n            'ocr_requested_at',\n            NOW(),\n\n            'last_extraction_workflow',\n            'WF-014',\n\n            'last_extraction_execution_id',\n            $3::TEXT\n        ),\n\n    updated_at =\n        NOW()\n\nWHERE id =\n    $1::UUID\n\nRETURNING\n    id\n        AS opportunity_document_id,\n\n    organization_id,\n    opportunity_analysis_id,\n    process_id,\n\n    process_reference,\n    document_name,\n\n    extraction_status,\n    extraction_attempt_count,\n    extraction_error,\n\n    metadata\n        ->> 'requires_ocr'\n        AS requires_ocr,\n\n    metadata\n        ->> 'ocr_status'\n        AS ocr_status,\n\n    ai_requirement_status,\n\n    'extraction_failed_requires_ocr'\n        AS extraction_result_type,\n\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.opportunity_document_id,\n\n  $json.extraction_error\n    ?? 'El extractor no produjo texto suficiente. El PDF puede ser una imagen escaneada o estar protegido.',\n\n  String(\n    $execution.id\n    ?? ''\n  )\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1184,
+        560
+      ],
+      "id": "5a783750-c01d-41db-9282-ec8588daa9d0",
+      "name": "Registrar extracción fallida WF-014",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE saas.opportunity_documents\nSET\n    extraction_status =\n        'unsupported',\n\n    extraction_error =\n        CONCAT(\n            'Formato pendiente de extractor especializado: ',\n            COALESCE(\n                NULLIF(\n                    LOWER(\n                        $2::TEXT\n                    ),\n                    ''\n                ),\n                'desconocido'\n            )\n        ),\n\n    ai_requirement_status =\n        'not_requested',\n\n    metadata =\n        COALESCE(\n            metadata,\n            '{}'::JSONB\n        )\n        || jsonb_build_object(\n            'requires_conversion',\n            TRUE,\n\n            'conversion_status',\n            'pending',\n\n            'source_format',\n            COALESCE(\n                NULLIF(\n                    LOWER(\n                        $2::TEXT\n                    ),\n                    ''\n                ),\n                'unknown'\n            ),\n\n            'conversion_requested_at',\n            NOW(),\n\n            'last_extraction_workflow',\n            'WF-014',\n\n            'last_extraction_execution_id',\n            $3::TEXT\n        ),\n\n    updated_at =\n        NOW()\n\nWHERE id =\n    $1::UUID\n\nRETURNING\n    id\n        AS opportunity_document_id,\n\n    organization_id,\n    opportunity_analysis_id,\n    process_id,\n\n    process_reference,\n    document_name,\n\n    source_file_extension,\n    downloaded_file_extension,\n\n    extraction_status,\n    extraction_attempt_count,\n    extraction_error,\n\n    metadata\n        ->> 'requires_conversion'\n        AS requires_conversion,\n\n    metadata\n        ->> 'conversion_status'\n        AS conversion_status,\n\n    ai_requirement_status,\n\n    'unsupported_format'\n        AS extraction_result_type,\n\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.opportunity_document_id,\n\n  String(\n    $json.file_extension\n    ?? ''\n  )\n    .trim()\n    .toLowerCase(),\n\n  String(\n    $execution.id\n    ?? ''\n  )\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2352,
+        208
+      ],
+      "id": "3deb6744-8f73-4b16-934f-fb67def7dcf6",
+      "name": "Registrar formato pendiente WF-014",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    organization.name\n        AS organization_name,\n\n    document.process_reference,\n\n    COUNT(*)\n        AS total_documents,\n\n    COUNT(*) FILTER (\n        WHERE document.extraction_status =\n            'pending'\n    ) AS pending,\n\n    COUNT(*) FILTER (\n        WHERE document.extraction_status =\n            'running'\n    ) AS running,\n\n    COUNT(*) FILTER (\n        WHERE document.extraction_status =\n            'extracted'\n    ) AS extracted,\n\n    COUNT(*) FILTER (\n        WHERE document.extraction_status =\n            'failed'\n    ) AS failed,\n\n    COUNT(*) FILTER (\n        WHERE document.extraction_status =\n            'unsupported'\n    ) AS unsupported,\n\n    COUNT(*) FILTER (\n        WHERE document.ai_requirement_status =\n            'queued'\n    ) AS queued_for_ai\n\nFROM saas.opportunity_documents\n    AS document\n\nJOIN saas.organizations AS organization\n    ON organization.id =\n       document.organization_id\n\nWHERE document.download_status =\n    'downloaded'\n\nGROUP BY\n    organization.name,\n    document.process_reference\n\nORDER BY\n    organization.name,\n    document.process_reference;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2320,
+        -32
+      ],
+      "id": "2e3d959d-3bc3-4126-ac76-248a7f26b6fa",
+      "name": "Resumir extracciones WF-014",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c9cd5bb1-4c71-43bc-ab15-6e34816f93e8",
+              "name": "processing_mode",
+              "value": "={{ $json.processing_mode ?? 'all' }}",
+              "type": "string"
+            },
+            {
+              "id": "7e2130ff-bce2-46b1-b455-b9b3be95af7b",
+              "name": "max_documents",
+              "value": "={{ Math.min(2, Math.max(1, Number($json.max_documents ?? 2))) }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {},
+        "includeOtherFields": true
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        0
+      ],
+      "id": "a2ffe082-7887-47c3-aa26-6caa36e48bd9",
+      "name": "Configurar procesamiento WF-014"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ String($json.processing_route ?? \"pdf_text\") }}",
+                    "rightValue": "pdf_text",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "5423903a-de57-4d99-b571-cdca79328108"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "ef7715c2-33ec-4880-a360-969c4fe040d7",
+                    "leftValue": "={{ String($json.processing_route ?? \"pdf_text\") }}",
+                    "rightValue": "office_conversion",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "f15a2498-659d-4b31-9245-2e8e1de7cb3f",
+                    "leftValue": "={{ String($json.processing_route ?? \"pdf_text\") }}",
+                    "rightValue": "ocr",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1424,
+        784
+      ],
+      "id": "a2545dc1-7f1a-4137-8324-34090d2eb622",
+      "name": "Clasificar fallo de extracción WF-014"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE saas.opportunity_documents\nSET\n    extraction_status =\n        'failed',\n\n    extraction_error =\n        COALESCE(\n            NULLIF(\n                $2::TEXT,\n                ''\n            ),\n            'El proceso OCR no produjo texto útil.'\n        ),\n\n    ai_requirement_status =\n        'not_requested',\n\n    metadata =\n        COALESCE(\n            metadata,\n            '{}'::JSONB\n        )\n        || jsonb_build_object(\n            'requires_ocr',\n            TRUE,\n\n            'ocr_status',\n            'failed',\n\n            'ocr_error',\n            COALESCE(\n                NULLIF(\n                    $2::TEXT,\n                    ''\n                ),\n                'Error desconocido de OCR.'\n            ),\n\n            'ocr_failed_at',\n            NOW(),\n\n            'last_extraction_execution_id',\n            $3::TEXT\n        ),\n\n    updated_at =\n        NOW()\n\nWHERE id =\n    $1::UUID\n\nRETURNING\n    id\n        AS opportunity_document_id,\n\n    process_reference,\n    document_name,\n\n    extraction_status,\n    extraction_error,\n\n    metadata\n        ->> 'requires_ocr'\n        AS requires_ocr,\n\n    metadata\n        ->> 'ocr_status'\n        AS ocr_status,\n\n    extraction_attempt_count,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.opportunity_document_id,\n\n  $json.extraction_error\n    ?? $json.stderr\n    ?? $json.error?.message\n    ?? \"OCRmyPDF no produjo texto suficiente.\",\n\n  String($execution.id ?? \"\")\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2304,
+        1024
+      ],
+      "id": "de7c564b-50f5-427f-9889-889c78243619",
+      "name": "Registrar fallo OCR WF-014",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE saas.opportunity_documents\nSET\n    extraction_status =\n        'failed',\n\n    extraction_error =\n        COALESCE(\n            NULLIF(\n                $2::TEXT,\n                ''\n            ),\n            'No fue posible convertir o extraer el documento Office.'\n        ),\n\n    ai_requirement_status =\n        'not_requested',\n\n    metadata =\n        COALESCE(\n            metadata,\n            '{}'::JSONB\n        )\n        || jsonb_build_object(\n            'requires_conversion',\n            TRUE,\n\n            'conversion_status',\n            'failed',\n\n            'conversion_error',\n            COALESCE(\n                NULLIF(\n                    $2::TEXT,\n                    ''\n                ),\n                'Error desconocido de conversión Office.'\n            ),\n\n            'conversion_failed_at',\n            NOW(),\n\n            'last_extraction_execution_id',\n            $3::TEXT\n        ),\n\n    updated_at =\n        NOW()\n\nWHERE id =\n    $1::UUID\n\nRETURNING\n    id\n        AS opportunity_document_id,\n\n    process_reference,\n    document_name,\n\n    extraction_status,\n    extraction_error,\n\n    metadata\n        ->> 'conversion_status'\n        AS conversion_status,\n\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.opportunity_document_id,\n\n  $json.extraction_error\n    ?? \"No se obtuvo texto suficiente después de convertir el documento Office.\",\n\n  String($execution.id ?? \"\")\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1728,
+        800
+      ],
+      "id": "8c3c8b56-2573-41ae-be27-57c36b17c12a",
+      "name": "Registrar fallo conversión Office WF-014",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS (\n    SELECT\n        NULLIF(\n            $1::TEXT,\n            ''\n        ) AS execution_id,\n\n        COALESCE(\n            NULLIF(\n                $2::TEXT,\n                ''\n            ),\n            'all'\n        ) AS processing_mode,\n\n        GREATEST(\n            COALESCE(\n                NULLIF(\n                    $3::TEXT,\n                    ''\n                )::INTEGER,\n                5\n            ),\n            1\n        ) AS max_documents\n),\n\nlock_acquired AS (\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'running',\n\n        active_execution_id =\n            parameters.execution_id,\n\n        lock_acquired_at =\n            NOW(),\n\n        lock_expires_at =\n            NOW() + INTERVAL '60 minutes',\n\n        error_message =\n            NULL,\n\n        metadata =\n            COALESCE(\n                cursor.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'active_workflow',\n                'WF-014',\n\n                'active_execution_id',\n                parameters.execution_id,\n\n                'active_mode',\n                parameters.processing_mode,\n\n                'active_max_documents',\n                parameters.max_documents,\n\n                'lock_updated_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM parameters\n\n    WHERE cursor.source_code =\n          'SECOP_OPPORTUNITY_DOCUMENT_EXTRACTION'\n\n      AND (\n          cursor.status IS DISTINCT FROM\n              'running'\n\n          OR cursor.lock_expires_at IS NULL\n\n          OR cursor.lock_expires_at <\n             NOW()\n\n          OR cursor.active_execution_id =\n             parameters.execution_id\n      )\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at\n),\n\ncurrent_state AS (\n    SELECT\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at\n\n    FROM ops.sync_cursors\n        AS cursor\n\n    WHERE cursor.source_code =\n          'SECOP_OPPORTUNITY_DOCUMENT_EXTRACTION'\n\n    LIMIT 1\n)\n\nSELECT\n    EXISTS (\n        SELECT 1\n        FROM lock_acquired\n    ) AS lock_acquired,\n\n    current_state.source_code,\n\n    current_state.status,\n\n    current_state.active_execution_id,\n\n    current_state.lock_acquired_at,\n\n    current_state.lock_expires_at,\n\n    CASE\n        WHEN EXISTS (\n            SELECT 1\n            FROM lock_acquired\n        )\n            THEN 'lock_acquired'\n\n        ELSE 'execution_skipped_lock_busy'\n    END AS lock_result\n\nFROM current_state;",
+        "options": {
+          "queryReplacement": "={{ [\n  String($execution.id ?? \"\"),\n  String($json.processing_mode ?? \"all\"),\n  Number($json.max_documents ?? 5)\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        640,
+        0
+      ],
+      "id": "ed9aa468-dbfe-4216-9a28-4f5520490f5f",
+      "name": "Adquirir bloqueo WF-014",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5e825f00-5011-44e9-98ce-54b57acae134",
+              "leftValue": "={{ String($json.lock_acquired ?? '').trim().toLowerCase() === 'true' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        832,
+        0
+      ],
+      "id": "ef61d55f-b504-4801-b42e-d97e8cdb7e8e",
+      "name": "¿Bloqueo adquirido WF-014?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH active_lock AS (\n    SELECT\n        cursor.active_execution_id,\n        cursor.status,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at\n\n    FROM ops.sync_cursors\n        AS cursor\n\n    WHERE cursor.source_code =\n          'SECOP_OPPORTUNITY_DOCUMENT_EXTRACTION'\n\n    LIMIT 1\n),\n\nstale_documents AS (\n    SELECT\n        document.id,\n\n        COALESCE(\n            NULLIF(\n                document.metadata\n                    ->> 'active_extraction_route',\n                ''\n            ),\n\n            CASE\n                WHEN LOWER(\n                    COALESCE(\n                        NULLIF(\n                            document.downloaded_file_extension,\n                            ''\n                        ),\n                        document.source_file_extension,\n                        ''\n                    )\n                ) IN (\n                    'doc',\n                    'docx'\n                )\n                    THEN 'office_conversion'\n\n                WHEN LOWER(\n                    COALESCE(\n                        NULLIF(\n                            document.downloaded_file_extension,\n                            ''\n                        ),\n                        document.source_file_extension,\n                        ''\n                    )\n                ) =\n                    'pdf'\n\n                 AND COALESCE(\n                     document.metadata\n                         ->> 'requires_ocr',\n                     'false'\n                 ) =\n                     'true'\n                    THEN 'ocr'\n\n                WHEN LOWER(\n                    COALESCE(\n                        NULLIF(\n                            document.downloaded_file_extension,\n                            ''\n                        ),\n                        document.source_file_extension,\n                        ''\n                    )\n                ) =\n                    'pdf'\n                    THEN 'pdf_text'\n\n                ELSE 'unknown'\n            END\n        ) AS recovery_route,\n\n        NULLIF(\n            document.metadata\n                ->> 'active_extraction_execution_id',\n            ''\n        ) AS document_execution_id\n\n    FROM saas.opportunity_documents\n        AS document\n\n    WHERE document.extraction_status =\n          'running'\n\n      AND COALESCE(\n          document.last_extraction_attempt_at,\n          document.updated_at,\n          document.created_at\n      ) <\n          NOW() - INTERVAL '45 minutes'\n\n      /*\n       * No recuperar documentos que todavía pertenecen\n       * a una ejecución activa con bloqueo vigente.\n       */\n      AND NOT EXISTS (\n          SELECT 1\n\n          FROM active_lock\n              AS lock\n\n          WHERE lock.status =\n                'running'\n\n            AND lock.lock_expires_at >\n                NOW()\n\n            AND lock.active_execution_id\n                IS NOT NULL\n\n            AND lock.active_execution_id =\n                COALESCE(\n                    document.metadata\n                        ->> 'active_extraction_execution_id',\n                    ''\n                )\n      )\n\n    FOR UPDATE OF document\n    SKIP LOCKED\n),\n\nrecovered AS (\n    UPDATE saas.opportunity_documents\n        AS document\n\n    SET\n        extraction_status =\n            CASE stale.recovery_route\n                WHEN 'pdf_text'\n                    THEN 'pending'\n\n                WHEN 'office_conversion'\n                    THEN 'failed'\n\n                WHEN 'ocr'\n                    THEN 'failed'\n\n                ELSE 'failed'\n            END,\n\n        /*\n         * Una interrupción del workflow no debe consumir\n         * permanentemente un intento de extracción.\n         */\n        extraction_attempt_count =\n            GREATEST(\n                COALESCE(\n                    document.extraction_attempt_count,\n                    0\n                ) - 1,\n                0\n            ),\n\n        last_extraction_attempt_at =\n            NULL,\n\n        extraction_error =\n            CASE stale.recovery_route\n                WHEN 'pdf_text'\n                    THEN\n                        'Extracción PDF convencional recuperada después de quedar bloqueada en running.'\n\n                WHEN 'office_conversion'\n                    THEN\n                        'Conversión Office recuperada después de quedar bloqueada en running.'\n\n                WHEN 'ocr'\n                    THEN\n                        'Proceso OCR recuperado después de quedar bloqueado en running.'\n\n                ELSE\n                    'Extracción recuperada automáticamente después de quedar bloqueada en running.'\n            END,\n\n        ai_requirement_status =\n            'not_requested',\n\n        metadata =\n            (\n                COALESCE(\n                    document.metadata,\n                    '{}'::JSONB\n                )\n                - 'active_extraction_route'\n                - 'active_extraction_started_at'\n                - 'active_extraction_execution_id'\n            )\n\n            || CASE stale.recovery_route\n                WHEN 'office_conversion'\n                    THEN jsonb_build_object(\n                        'requires_conversion',\n                        TRUE,\n\n                        'conversion_status',\n                        'pending',\n\n                        'conversion_requeued_at',\n                        NOW()\n                    )\n\n                WHEN 'ocr'\n                    THEN jsonb_build_object(\n                        'requires_ocr',\n                        TRUE,\n\n                        'ocr_status',\n                        'pending',\n\n                        'ocr_requeued_at',\n                        NOW()\n                    )\n\n                WHEN 'pdf_text'\n                    THEN jsonb_build_object(\n                        'pdf_text_status',\n                        'pending',\n\n                        'pdf_text_requeued_at',\n                        NOW()\n                    )\n\n                ELSE\n                    jsonb_build_object(\n                        'recovery_requires_manual_review',\n                        TRUE\n                    )\n            END\n\n            || jsonb_build_object(\n                'automatic_recovery_at',\n                NOW(),\n\n                'automatic_recovery_workflow',\n                'WF-014',\n\n                'automatic_recovery_route',\n                stale.recovery_route,\n\n                'recovered_execution_id',\n                stale.document_execution_id,\n\n                'automatic_recovery_reason',\n                'Documento abandonado en running sin una ejecución activa propietaria.'\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM stale_documents\n        AS stale\n\n    WHERE document.id =\n          stale.id\n\n    RETURNING\n        document.id,\n        document.organization_id,\n        document.process_reference,\n        document.document_name,\n        document.extraction_status,\n        document.extraction_attempt_count,\n        document.updated_at\n)\n\nSELECT\n    COUNT(*)\n        AS recovered_documents,\n\n    COALESCE(\n        JSONB_AGG(\n            jsonb_build_object(\n                'opportunity_document_id',\n                recovered.id,\n\n                'organization_id',\n                recovered.organization_id,\n\n                'process_reference',\n                recovered.process_reference,\n\n                'document_name',\n                recovered.document_name,\n\n                'recovery_route',\n                stale.recovery_route,\n\n                'previous_execution_id',\n                stale.document_execution_id,\n\n                'new_extraction_status',\n                recovered.extraction_status,\n\n                'extraction_attempt_count',\n                recovered.extraction_attempt_count,\n\n                'recovered_at',\n                recovered.updated_at\n            )\n        ) FILTER (\n            WHERE recovered.id IS NOT NULL\n        ),\n        '[]'::JSONB\n    ) AS recovered_items,\n\n    CASE\n        WHEN COUNT(*) = 0\n            THEN 'no_stale_documents'\n\n        ELSE 'stale_documents_recovered'\n    END AS recovery_status\n\nFROM recovered\n\nJOIN stale_documents\n    AS stale\n    ON stale.id =\n       recovered.id;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        432,
+        0
+      ],
+      "id": "40b320bc-f728-4a45-babf-16baf412a8e6",
+      "name": "Recuperar extracciones bloqueadas WF-14",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"workflow_code\": \"WF-014\",\n  \"status\": \"skipped\",\n  \"reason\": \"Existe otra ejecución activa de WF-014.\"\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        832,
+        -160
+      ],
+      "id": "d8a33059-4c18-4ab1-b331-465aa1c42ebc",
+      "name": "Finalizar ejecución omitida WF-014"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS (\n    SELECT\n        NULLIF(\n            $1::TEXT,\n            ''\n        ) AS execution_id\n),\n\nreleased AS (\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'success',\n\n        active_execution_id =\n            NULL,\n\n        lock_acquired_at =\n            NULL,\n\n        lock_expires_at =\n            NULL,\n\n        error_message =\n            NULL,\n\n        metadata =\n            COALESCE(\n                cursor.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'last_successful_workflow',\n                'WF-014',\n\n                'last_successful_execution_id',\n                parameters.execution_id,\n\n                'last_successful_finished_at',\n                NOW(),\n\n                'lock_released_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM parameters\n\n    WHERE cursor.source_code =\n          'SECOP_OPPORTUNITY_DOCUMENT_EXTRACTION'\n\n      AND cursor.active_execution_id =\n          parameters.execution_id\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n        cursor.error_message,\n        cursor.updated_at\n),\n\ncurrent_state AS (\n    SELECT\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n        cursor.error_message,\n        cursor.updated_at\n\n    FROM ops.sync_cursors\n        AS cursor\n\n    WHERE cursor.source_code =\n          'SECOP_OPPORTUNITY_DOCUMENT_EXTRACTION'\n\n    LIMIT 1\n)\n\nSELECT\n    TRUE\n        AS lock_released,\n\n    released.source_code,\n    released.status,\n    released.active_execution_id,\n    released.lock_acquired_at,\n    released.lock_expires_at,\n    released.error_message,\n    released.updated_at,\n\n    'lock_released'\n        AS release_result\n\nFROM released\n\nUNION ALL\n\nSELECT\n    FALSE\n        AS lock_released,\n\n    current_state.source_code,\n    current_state.status,\n    current_state.active_execution_id,\n    current_state.lock_acquired_at,\n    current_state.lock_expires_at,\n    current_state.error_message,\n    current_state.updated_at,\n\n    CASE\n        WHEN current_state.active_execution_id\n             IS NULL\n\n         AND current_state.status IN (\n             'idle',\n             'success'\n         )\n            THEN 'already_released'\n\n        ELSE 'lock_owned_by_another_execution'\n    END AS release_result\n\nFROM current_state\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM released\n);",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $execution.id ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2000,
+        -32
+      ],
+      "id": "ed668400-51dc-4da1-961a-7035a17fc5ff",
+      "name": "Liberar bloqueo WF-14",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "requested_by_user_id"
+            },
+            {
+              "name": "process_id"
+            },
+            {
+              "name": "processing_mode"
+            },
+            {
+              "name": "orchestration_execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -96,
+        -352
+      ],
+      "id": "73208b98-57fd-424a-b741-8349fb16db06",
+      "name": "When Executed by Another Workflow"
+    }
+  ],
+  "connections": {
+    "Inicio Manual WF-014": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tomar lote de extracción WF-014": {
+      "main": [
+        [
+          {
+            "node": "¿Hay documentos para extraer WF-014?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay documentos para extraer WF-014?": {
+      "main": [
+        [
+          {
+            "node": "Procesar extracciones una a una WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Liberar bloqueo WF-14",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar extracciones una a una WF-014": {
+      "main": [
+        [
+          {
+            "node": "Liberar bloqueo WF-14",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Clasificar formato de extracción WF-014",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extraer texto PDF WF-14",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar formato de extracción WF-014": {
+      "main": [
+        [
+          {
+            "node": "Descargar PDF para extracción WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar formato pendiente WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar formato pendiente WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar formato pendiente WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar PDF para extracción WF-014": {
+      "main": [
+        [
+          {
+            "node": "Extraer texto PDF WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer texto PDF WF-014": {
+      "main": [
+        [
+          {
+            "node": "Extraer texto PDF WF-14",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Extraer texto PDF WF-14": {
+      "main": [
+        [
+          {
+            "node": "Normalizar texto extraído WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar texto extraído WF-014": {
+      "main": [
+        [
+          {
+            "node": "¿Extracción válida WF-014?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Extracción válida WF-014?": {
+      "main": [
+        [
+          {
+            "node": "Guardar texto extraído WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Clasificar fallo de extracción WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar texto extraído WF-014": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Procesar extracciones una a una WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar extracción fallida WF-014": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar formato pendiente WF-014": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configurar procesamiento WF-014": {
+      "main": [
+        [
+          {
+            "node": "Recuperar extracciones bloqueadas WF-14",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar fallo de extracción WF-014": {
+      "main": [
+        [
+          {
+            "node": "Registrar extracción fallida WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar fallo conversión Office WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar fallo OCR WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar fallo OCR WF-014": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adquirir bloqueo WF-014": {
+      "main": [
+        [
+          {
+            "node": "¿Bloqueo adquirido WF-014?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Bloqueo adquirido WF-014?": {
+      "main": [
+        [
+          {
+            "node": "Tomar lote de extracción WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalizar ejecución omitida WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recuperar extracciones bloqueadas WF-14": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Liberar bloqueo WF-14": {
+      "main": [
+        [
+          {
+            "node": "Resumir extracciones WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-014",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "CernoIAProdWF007",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Bogota",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

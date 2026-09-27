@@ -1,0 +1,156 @@
+{
+  "id": "CernoIAProdWF026",
+  "name": "[CernoIA PROD] WF-026 — Renovaciones y conciliación Bold",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -620,
+        0
+      ],
+      "id": "026000000-0000-4000-8000-000000000001",
+      "name": "Horario WF-026",
+      "disabled": false
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        180
+      ],
+      "id": "026000000-0000-4000-8000-000000000002",
+      "name": "Inicio Manual WF-026"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:4001/api/integrations/billing/reconcile",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -360,
+        0
+      ],
+      "id": "026000000-0000-4000-8000-000000000003",
+      "name": "Llamar API privada WF-026",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CernoIAProdWebhook",
+          "name": "CernoIA Webhook Secret"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{workflow_code:'WF-026',workflow_status:$json.error?'failed':'success',result:$json,finished_at:new Date().toISOString()}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -100,
+        0
+      ],
+      "id": "026000000-0000-4000-8000-000000000004",
+      "name": "Finalizar WF-026"
+    },
+    {
+      "id": "dbf96d3f-1c97-45ec-95f0-43e310996693",
+      "name": "Entrada interna WF026",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -400,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    }
+  ],
+  "connections": {
+    "Horario WF-026": {
+      "main": [
+        [
+          {
+            "node": "Llamar API privada WF-026",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inicio Manual WF-026": {
+      "main": [
+        [
+          {
+            "node": "Llamar API privada WF-026",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Llamar API privada WF-026": {
+      "main": [
+        [
+          {
+            "node": "Finalizar WF-026",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalizar WF-026",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada interna WF026": {
+      "main": [
+        [
+          {
+            "node": "Llamar API privada WF-026",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Bogota",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "CernoIAProdWF007"
+  },
+  "active": false
+}

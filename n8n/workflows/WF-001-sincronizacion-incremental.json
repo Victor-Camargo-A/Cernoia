@@ -1,0 +1,1678 @@
+{
+  "name": "[CernoIA PROD] WF-001 - Sincronización incremental SECOP II",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -544,
+        -128
+      ],
+      "id": "463bfef7-c270-4816-be81-d0e87e302eb4",
+      "name": "Inicio Manual"
+    },
+    {
+      "parameters": {
+        "url": "https://www.datos.gov.co/resource/p6dx-8zbt.json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "$limit",
+              "value": "1000"
+            },
+            {
+              "name": "$order",
+              "value": "fecha_de_ultima_publicaci ASC, id_del_proceso ASC"
+            },
+            {
+              "name": "$where",
+              "value": "={{\n(() => {\n  // Lee el cursor correspondiente a la ejecución actual del ciclo.\n  const cursorItems = $('Leer cursor SECOP II').all(0, $runIndex);\n  const cursor = cursorItems[0]?.json ?? {};\n\n  const rawTimestamp =\n    cursor.cursor_timestamp || cursor.sync_from;\n\n  if (!rawTimestamp) {\n    throw new Error(\n      'No se encontró cursor_timestamp ni sync_from.'\n    );\n  }\n\n  const timestamp = new Date(rawTimestamp)\n    .toISOString()\n    .replace('Z', '');\n\n  const processId = String(\n    cursor.cursor_process_id || ''\n  ).replace(/'/g, \"''\");\n\n  // Primera sincronización: todavía no existe processId.\n  if (!processId) {\n    return (\n      \"fecha_de_publicacion_del IS NOT NULL \" +\n      \"AND fecha_de_ultima_publicaci >= '\" +\n      timestamp +\n      \"'\"\n    );\n  }\n\n  // Siguientes lotes: utiliza fecha + identificador.\n  return (\n    \"fecha_de_publicacion_del IS NOT NULL AND (\" +\n      \"fecha_de_ultima_publicaci > '\" + timestamp + \"'\" +\n      \" OR (\" +\n        \"fecha_de_ultima_publicaci = '\" + timestamp + \"'\" +\n        \" AND id_del_proceso > '\" + processId + \"'\" +\n      \")\" +\n    \")\"\n  );\n})()\n}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 45000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        560,
+        -112
+      ],
+      "id": "1520d0af-489f-413e-9674-d223a309626f",
+      "name": "Consultar SECOP II",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1f5ee2c4-61cf-4962-9c39-cd5c418ceccf",
+              "name": "secop_process_id",
+              "value": "={{ $json.id_del_proceso }}",
+              "type": "string"
+            },
+            {
+              "id": "f60cb05b-0c60-4ba9-a213-97ede179ed82",
+              "name": "reference",
+              "value": "={{ $json.referencia_del_proceso || null }}",
+              "type": "string"
+            },
+            {
+              "id": "0f398050-a43a-43d5-9ae8-e13ec08862a1",
+              "name": "raw_json",
+              "value": "={{ $json }}",
+              "type": "object"
+            },
+            {
+              "id": "1196d0ce-f883-4643-96a4-3cba0e51203f",
+              "name": "entity_name",
+              "value": "={{ $json.entidad || null }}",
+              "type": "string"
+            },
+            {
+              "id": "fc69a779-665c-488f-806e-352e1b2e2579",
+              "name": "publication_date",
+              "value": "={{ $json.fecha_de_publicacion_del || null }}",
+              "type": "string"
+            },
+            {
+              "id": "f411a585-112a-4b0c-8e4b-d405149bba58",
+              "name": "entity_nit",
+              "value": "={{ $json.nit_entidad || null }}",
+              "type": "string"
+            },
+            {
+              "id": "801b3d46-1d30-4f42-b6ce-258b71c99343",
+              "name": "department",
+              "value": "={{ $json.departamento_entidad || null }}",
+              "type": "string"
+            },
+            {
+              "id": "d64e152b-0084-4695-8742-444700edef68",
+              "name": "city",
+              "value": "={{ $json.ciudad_entidad || null }}",
+              "type": "string"
+            },
+            {
+              "id": "47acbc91-c65f-454b-877e-5c316c6637f8",
+              "name": "process_name",
+              "value": "={{ $json.nombre_del_procedimiento || null }}",
+              "type": "string"
+            },
+            {
+              "id": "25ede34a-2c37-42bd-8e07-4fccd3009e14",
+              "name": "description",
+              "value": "={{ $json.descripci_n_del_procedimiento || null }}",
+              "type": "string"
+            },
+            {
+              "id": "25c65756-c915-4174-a57d-1a3e716f1a2b",
+              "name": "procurement_method",
+              "value": "={{ $json.modalidad_de_contratacion || null }}",
+              "type": "string"
+            },
+            {
+              "id": "1e48c0bd-c3ce-419c-9967-43f58ee9e184",
+              "name": "base_price",
+              "value": "={{ $json.precio_base !== undefined && $json.precio_base !== null && $json.precio_base !== '' ? Number($json.precio_base) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "c32a1c52-c265-427b-8181-15db40b4a0ef",
+              "name": "process_status",
+              "value": "={{ $json.estado_del_procedimiento || null }}",
+              "type": "string"
+            },
+            {
+              "id": "76df809e-47da-4949-9451-7a17ed04b5e0",
+              "name": "awarded",
+              "value": "={{ String($json.adjudicado || '').trim().toLowerCase() === 'si' || String($json.adjudicado || '').trim().toLowerCase() === 'sí' }}",
+              "type": "boolean"
+            },
+            {
+              "id": "a3807d60-2f46-4f84-ac36-1c465c34e2ba",
+              "name": "portfolio_id",
+              "value": "={{ $json.id_del_portafolio || null }}",
+              "type": "string"
+            },
+            {
+              "id": "a981086c-76d5-4385-af34-7ffd08e8a072",
+              "name": "ppi",
+              "value": "={{ $json.ppi !== undefined && $json.ppi !== null && $json.ppi !== '' ? String($json.ppi) : null }}",
+              "type": "string"
+            },
+            {
+              "id": "c61a6b39-f6de-43a6-a081-cd9520b60f20",
+              "name": "entity_order",
+              "value": "={{ $json.ordenentidad || null }}",
+              "type": "string"
+            },
+            {
+              "id": "c9a2737a-a3fe-4005-a689-a745e88d1680",
+              "name": "pci_code",
+              "value": "={{ $json.codigo_pci || null }}",
+              "type": "string"
+            },
+            {
+              "id": "5d3c440d-ec6d-49a4-a4a8-1f426616e070",
+              "name": "phase",
+              "value": "={{ $json.fase || null }}",
+              "type": "string"
+            },
+            {
+              "id": "9bedcd1b-baa2-4a0a-a44b-d771cf3323ac",
+              "name": "procurement_justification",
+              "value": "={{ $json.justificaci_n_modalidad_de || null }}",
+              "type": "string"
+            },
+            {
+              "id": "6cfef521-c113-4db7-b0f0-188b9b0ec53f",
+              "name": "process_status_id",
+              "value": "={{ $json.id_estado_del_procedimiento !== undefined && $json.id_estado_del_procedimiento !== null && $json.id_estado_del_procedimiento !== '' ? String($json.id_estado_del_procedimiento) : null }}",
+              "type": "string"
+            },
+            {
+              "id": "153ef885-a8fe-4152-9240-8a0fddae5ba5",
+              "name": "award_id",
+              "value": "={{ $json.id_adjudicacion || null }}",
+              "type": "string"
+            },
+            {
+              "id": "3ad22a07-008b-41fe-bb29-8ab6eb99ddc1",
+              "name": "duration_value",
+              "value": "={{ /^-?\\d+([.,]\\d+)?$/.test(String($json.duracion ?? '').trim()) ? Number(String($json.duracion).replace(',', '.')) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "df18f563-5ba5-4434-b5f9-8ecb757f7f30",
+              "name": "duration_unit",
+              "value": "={{ $json.unidad_de_duracion || null }}",
+              "type": "string"
+            },
+            {
+              "id": "08b4b6cf-5c8c-4fab-8cff-247297d68c9a",
+              "name": "contracting_unit_city",
+              "value": "={{ $json.ciudad_de_la_unidad_de || null }}",
+              "type": "string"
+            },
+            {
+              "id": "33cbb6bc-5e79-4ca5-8a00-f4b0b2ad06e9",
+              "name": "contracting_unit_name",
+              "value": "={{ $json.nombre_de_la_unidad_de || null }}",
+              "type": "string"
+            },
+            {
+              "id": "eeedb906-4d9b-418c-bcb7-9bd5ed7d5f07",
+              "name": "invited_suppliers",
+              "value": "={{ /^\\d+$/.test(String($json.proveedores_invitados ?? '').trim()) ? Number($json.proveedores_invitados) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "ce1908df-c7dd-4f8e-b490-08244789a7cb",
+              "name": "suppliers_with_invitation",
+              "value": "={{ /^\\d+$/.test(String($json.proveedores_con_invitacion ?? '').trim()) ? Number($json.proveedores_con_invitacion) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "66d1ad5c-3410-44d0-8c87-f88403702dae",
+              "name": "views_count",
+              "value": "={{ /^\\d+$/.test(String($json.visualizaciones_del ?? '').trim()) ? Number($json.visualizaciones_del) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "b141ac97-0975-4078-a67e-b2b09d25cb42",
+              "name": "suppliers_expressed_interest",
+              "value": "={{ /^\\d+$/.test(String($json.proveedores_que_manifestaron ?? '').trim()) ? Number($json.proveedores_que_manifestaron) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "07ebb045-4cb3-46a8-8bb4-8d89439f928b",
+              "name": "procedure_responses",
+              "value": "={{ /^\\d+$/.test(String($json.respuestas_al_procedimiento ?? '').trim()) ? Number($json.respuestas_al_procedimiento) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "126448b9-d34c-4ba3-83a6-937c0f6e6e8f",
+              "name": "external_responses",
+              "value": "={{ /^\\d+$/.test(String($json.respuestas_externas ?? '').trim()) ? Number($json.respuestas_externas) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "bb1f4115-686e-46da-8fe7-0793c3257345",
+              "name": "offer_response_count",
+              "value": "={{ /^\\d+$/.test(String($json.conteo_de_respuestas_a_ofertas ?? '').trim()) ? Number($json.conteo_de_respuestas_a_ofertas) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "ed4e5b02-691e-4a11-b446-38abdcbabf60",
+              "name": "unique_suppliers_with_responses",
+              "value": "={{ /^\\d+$/.test(String($json.proveedores_unicos_con ?? '').trim()) ? Number($json.proveedores_unicos_con) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "cb992c75-f177-4ab3-9e54-03aeedc5cdc1",
+              "name": "lot_count",
+              "value": "={{ /^\\d+$/.test(String($json.numero_de_lotes ?? '').trim()) ? Number($json.numero_de_lotes) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "83f747c6-43eb-4068-a53c-4cfb9c2a5c2a",
+              "name": "source_updated_at",
+              "value": "={{ $json.fecha_de_ultima_publicaci || null }}",
+              "type": "string"
+            },
+            {
+              "id": "66099904-1b27-489d-8566-4509ba57ccb0",
+              "name": "phase_3_publication_date",
+              "value": "={{ $json.fecha_de_publicacion_fase_3 || null }}",
+              "type": "string"
+            },
+            {
+              "id": "90e580bd-76ec-4eaf-b079-8c20b21b77c9",
+              "name": "supplier_code",
+              "value": "={{ !['', 'no definido', 'no adjudicado'].includes(String($json.codigoproveedor ?? '').trim().toLowerCase()) ? String($json.codigoproveedor).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "a43bdc58-d374-47b2-921e-cc4c41508c94",
+              "name": "supplier_department",
+              "value": "={{ !['', 'no definido'].includes(String($json.departamento_proveedor ?? '').trim().toLowerCase()) ? String($json.departamento_proveedor).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "873b7b07-d6d3-4375-baff-41bb7a2ecf5c",
+              "name": "supplier_city",
+              "value": "={{ !['', 'no definido'].includes(String($json.ciudad_proveedor ?? '').trim().toLowerCase()) ? String($json.ciudad_proveedor).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "1e3089ac-033c-4938-88a2-a088f0c4fd11",
+              "name": "awarded_supplier_name",
+              "value": "={{ !['', 'no definido', 'no adjudicado'].includes(String($json.nombre_del_proveedor_adjudicado ?? '').trim().toLowerCase()) ? String($json.nombre_del_proveedor_adjudicado).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "7ef9b70b-030b-46e5-b043-6b6c3260ab79",
+              "name": "awarded_supplier_nit",
+              "value": "={{ !['', 'no definido', 'no adjudicado'].includes(String($json.nit_del_proveedor_adjudicado ?? '').trim().toLowerCase()) ? String($json.nit_del_proveedor_adjudicado).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "4edca70f-1c05-4d97-a768-66b2e6c17f48",
+              "name": "total_awarded_value",
+              "value": "={{ String($json.valor_total_adjudicacion ?? '').trim() !== '' && !isNaN(Number(String($json.valor_total_adjudicacion).replace(/,/g, ''))) ? Number(String($json.valor_total_adjudicacion).replace(/,/g, '')) : null }}",
+              "type": "number"
+            },
+            {
+              "id": "3101e140-f58f-47e9-a950-3dd320037504",
+              "name": "contract_type",
+              "value": "={{ !['', 'no definido'].includes(String($json.tipo_de_contrato ?? '').trim().toLowerCase()) ? String($json.tipo_de_contrato).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "6f10fa81-092f-429a-9898-4419cc1d2496",
+              "name": "contract_subtype",
+              "value": "={{ !['', 'no definido'].includes(String($json.subtipo_de_contrato ?? '').trim().toLowerCase()) ? String($json.subtipo_de_contrato).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "5f2ed28e-e9c7-438e-a192-2824467f5eb9",
+              "name": "main_category_code",
+              "value": "={{ !['', 'no definido'].includes(String($json.codigo_principal_de_categoria ?? '').trim().toLowerCase()) ? String($json.codigo_principal_de_categoria).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "18612595-60fc-4a62-95ec-7a9c20ff61ca",
+              "name": "additional_categories",
+              "value": "={{ !['', 'no definido'].includes(String($json.categorias_adicionales ?? '').trim().toLowerCase()) ? String($json.categorias_adicionales).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "4ec8ca37-3cda-471b-97b5-45ba2db8d267",
+              "name": "opening_status",
+              "value": "={{ !['', 'no definido'].includes(String($json.estado_de_apertura_del_proceso ?? '').trim().toLowerCase()) ? String($json.estado_de_apertura_del_proceso).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "9365eb20-6aa2-4cf7-aac8-3e2d29b2b3a2",
+              "name": "summary_status",
+              "value": "={{ !['', 'no definido'].includes(String($json.estado_resumen ?? '').trim().toLowerCase()) ? String($json.estado_resumen).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "2c5ca010-a9b4-4fed-bc0f-5951a5f6c3fd",
+              "name": "process_url",
+              "value": "={{ String($json.urlproceso ?? '').trim() !== '' ? String($json.urlproceso).trim() : null }}",
+              "type": "string"
+            },
+            {
+              "id": "30a4c7f8-f4ca-49cf-b6af-89a0a42fe5c8",
+              "name": "response_deadline",
+              "value": "={{ $json.fecha_de_recepcion_de || null }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": "={{ false }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        912,
+        -128
+      ],
+      "id": "c17cf3c2-552b-42ed-96cc-31e62eeef16c",
+      "name": "Normalizar proceso SECOP"
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "schema": {
+          "__rl": true,
+          "value": "secop",
+          "mode": "list",
+          "cachedResultName": "secop"
+        },
+        "table": {
+          "__rl": true,
+          "value": "processes",
+          "mode": "list",
+          "cachedResultName": "processes"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {
+            "awarded": false,
+            "base_price": 0
+          },
+          "matchingColumns": [
+            "secop_process_id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "secop_process_id",
+              "displayName": "secop_process_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "reference",
+              "displayName": "reference",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "entity_name",
+              "displayName": "entity_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "entity_nit",
+              "displayName": "entity_nit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "department",
+              "displayName": "department",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "city",
+              "displayName": "city",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "process_name",
+              "displayName": "process_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "description",
+              "displayName": "description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "procurement_method",
+              "displayName": "procurement_method",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "contract_type",
+              "displayName": "contract_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "base_price",
+              "displayName": "base_price",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "publication_date",
+              "displayName": "publication_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "response_deadline",
+              "displayName": "response_deadline",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source_updated_at",
+              "displayName": "source_updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "process_status",
+              "displayName": "process_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "awarded",
+              "displayName": "awarded",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "main_category_code",
+              "displayName": "main_category_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "process_url",
+              "displayName": "process_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "content_hash",
+              "displayName": "content_hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "raw_json",
+              "displayName": "raw_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "object",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "first_seen_at",
+              "displayName": "first_seen_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "last_seen_at",
+              "displayName": "last_seen_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "portfolio_id",
+              "displayName": "portfolio_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "ppi",
+              "displayName": "ppi",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "entity_order",
+              "displayName": "entity_order",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "pci_code",
+              "displayName": "pci_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "phase",
+              "displayName": "phase",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "procurement_justification",
+              "displayName": "procurement_justification",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "process_status_id",
+              "displayName": "process_status_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "award_id",
+              "displayName": "award_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "duration_value",
+              "displayName": "duration_value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "duration_unit",
+              "displayName": "duration_unit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "contracting_unit_city",
+              "displayName": "contracting_unit_city",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "contracting_unit_name",
+              "displayName": "contracting_unit_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "invited_suppliers",
+              "displayName": "invited_suppliers",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "suppliers_with_invitation",
+              "displayName": "suppliers_with_invitation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "views_count",
+              "displayName": "views_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "suppliers_expressed_interest",
+              "displayName": "suppliers_expressed_interest",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "procedure_responses",
+              "displayName": "procedure_responses",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "external_responses",
+              "displayName": "external_responses",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "offer_response_count",
+              "displayName": "offer_response_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "unique_suppliers_with_responses",
+              "displayName": "unique_suppliers_with_responses",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "lot_count",
+              "displayName": "lot_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "phase_3_publication_date",
+              "displayName": "phase_3_publication_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "supplier_code",
+              "displayName": "supplier_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "supplier_department",
+              "displayName": "supplier_department",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "supplier_city",
+              "displayName": "supplier_city",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "awarded_supplier_name",
+              "displayName": "awarded_supplier_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "awarded_supplier_nit",
+              "displayName": "awarded_supplier_nit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "total_awarded_value",
+              "displayName": "total_awarded_value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1072,
+        -128
+      ],
+      "id": "684d64bd-3886-4475-9cf2-02b180ca590a",
+      "name": "Guardar proceso",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    source_code,\n    cursor_timestamp,\n    cursor_process_id,\n\n    COALESCE(\n        cursor_timestamp,\n        DATE_TRUNC('day', NOW() - INTERVAL '7 days')\n    ) AS sync_from\n\nFROM ops.sync_cursors\nWHERE source_code = 'SECOP_II_PROCESSES';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        400,
+        -112
+      ],
+      "id": "9c06f9d9-8d7b-496c-bd7e-aca0f133d7a3",
+      "name": "Leer cursor SECOP II",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH batch AS (\n SELECT * FROM jsonb_to_recordset($1::jsonb) AS r(cursor_timestamp timestamptz,cursor_process_id text)\n) SELECT 'SECOP_II_PROCESSES'::text AS source_code,cursor_timestamp,cursor_process_id,\n jsonb_array_length($1::jsonb) AS batch_count FROM batch\n WHERE cursor_timestamp IS NOT NULL AND NULLIF(cursor_process_id,'') IS NOT NULL\n ORDER BY cursor_timestamp DESC,cursor_process_id COLLATE \"C\" DESC LIMIT 1;",
+        "options": {
+          "queryBatching": "single",
+          "queryReplacement": "={{ [ JSON.stringify($('Normalizar proceso SECOP').all(0, $runIndex).map(item => ({ cursor_timestamp: item.json.source_updated_at, cursor_process_id: item.json.secop_process_id }))) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1248,
+        -128
+      ],
+      "id": "45ebfaad-a632-4215-97a5-e39d451ec988",
+      "name": "Preparar avance del cursor",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH cursor_update AS (\n    UPDATE ops.sync_cursors\n    SET\n        cursor_timestamp =\n            NULLIF(\n                $1::TEXT,\n                ''\n            )::TIMESTAMPTZ,\n\n        cursor_process_id =\n            NULLIF(\n                $2::TEXT,\n                ''\n            ),\n\n        status = 'running',\n        last_run_at = NOW(),\n\n        records_processed =\n            records_processed + $3::BIGINT,\n\n        error_message = NULL,\n\n        lock_expires_at =\n            NOW() + INTERVAL '30 minutes',\n\n        metadata =\n            COALESCE(metadata, '{}'::JSONB)\n            || jsonb_build_object(\n                'last_batch_count',\n                $4::BIGINT,\n\n                'last_cursor_timestamp',\n                $5::TEXT,\n\n                'last_cursor_process_id',\n                $6::TEXT,\n\n                'current_execution_id',\n                $7::TEXT,\n\n                'current_execution_batches',\n                COALESCE(\n                    NULLIF(\n                        metadata ->> 'current_execution_batches',\n                        ''\n                    )::INTEGER,\n                    0\n                ) + 1,\n\n                'current_execution_records',\n                COALESCE(\n                    NULLIF(\n                        metadata ->> 'current_execution_records',\n                        ''\n                    )::BIGINT,\n                    0\n                ) + $8::BIGINT,\n\n                'lock_renewed_at',\n                NOW()\n            ),\n\n        updated_at = NOW()\n\n    WHERE source_code = 'SECOP_II_PROCESSES'\n      AND active_execution_id = $9::TEXT\n\n    RETURNING\n        source_code,\n        cursor_timestamp,\n        cursor_process_id,\n        status,\n        active_execution_id,\n        lock_acquired_at,\n        lock_expires_at,\n        records_processed,\n        metadata,\n        updated_at\n),\n\nrun_update AS (\n    UPDATE ops.workflow_runs\n    SET\n        batches_processed =\n            batches_processed + 1,\n\n        records_read =\n            records_read + $10::BIGINT,\n\n        records_written =\n            records_written + $11::BIGINT,\n\n        cursor_end_timestamp =\n            NULLIF(\n                $12::TEXT,\n                ''\n            )::TIMESTAMPTZ,\n\n        cursor_end_process_id =\n            NULLIF(\n                $13::TEXT,\n                ''\n            ),\n\n        updated_at = NOW()\n\n    WHERE n8n_execution_id = $14::TEXT\n      AND status = 'running'\n\n    RETURNING\n        id,\n        n8n_execution_id,\n        batches_processed,\n        records_read,\n        records_written,\n        cursor_end_timestamp,\n        cursor_end_process_id\n)\n\nSELECT\n    cursor_update.source_code,\n    cursor_update.cursor_timestamp,\n    cursor_update.cursor_process_id,\n    cursor_update.status,\n    cursor_update.active_execution_id,\n    cursor_update.lock_acquired_at,\n    cursor_update.lock_expires_at,\n    cursor_update.records_processed,\n    cursor_update.metadata,\n\n    run_update.id AS workflow_run_id,\n    run_update.batches_processed,\n    run_update.records_read,\n    run_update.records_written,\n    run_update.cursor_end_timestamp,\n    run_update.cursor_end_process_id\n\nFROM cursor_update\nLEFT JOIN run_update ON TRUE;",
+        "options": {
+          "queryReplacement": "={{ [ $json.cursor_timestamp, $json.cursor_process_id, Number($json.batch_count), Number($json.batch_count), $json.cursor_timestamp, $json.cursor_process_id, $execution.id, Number($json.batch_count), $execution.id, Number($json.batch_count), Number($json.batch_count), $json.cursor_timestamp, $json.cursor_process_id, $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1392,
+        -128
+      ],
+      "id": "1ae1b5c3-de98-4c6c-a28e-8c7940ae3b79",
+      "name": "Actualizar cursor SECOP II",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "625ba887-a221-4a35-b0de-32676e79bccf",
+              "leftValue": "={{ Number($json.metadata?.last_batch_count ?? 0) }}",
+              "rightValue": "={{ 1000 }}",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "4e4ea570-fcf2-46e4-8a7b-07e25d58acdd",
+              "leftValue": "={{ $runIndex }}",
+              "rightValue": "={{ 19 }}",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        416,
+        128
+      ],
+      "id": "913abb46-a8e6-4b3b-8d69-61edbbba710d",
+      "name": "¿Hay otro lote?"
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        112
+      ],
+      "id": "aa52e0b8-c267-4b4d-8835-b905ec56fc1e",
+      "name": "Pausa entre lotes",
+      "webhookId": "b6d534e9-538e-4420-81f3-76c7b16260eb"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ops.sync_cursors\nSET\n    active_execution_id = $1::TEXT,\n\n    lock_acquired_at = NOW(),\n    lock_expires_at = NOW() + INTERVAL '30 minutes',\n\n    status = 'running',\n    last_run_at = NOW(),\n    error_message = NULL,\n\n    metadata = COALESCE(metadata, '{}'::JSONB)\n        || jsonb_build_object(\n            'current_execution_id',\n            $2::TEXT,\n\n            'current_execution_batches',\n            0,\n\n            'current_execution_records',\n            0,\n\n            'current_execution_started_at',\n            NOW()\n        ),\n\n    updated_at = NOW()\n\nWHERE source_code = 'SECOP_II_PROCESSES'\n\n  AND (\n      active_execution_id IS NULL\n      OR lock_expires_at IS NULL\n      OR lock_expires_at <= NOW()\n      OR active_execution_id = $3::TEXT\n  )\n\nRETURNING\n    source_code,\n    cursor_timestamp,\n    cursor_process_id,\n\n    records_processed,\n\n    active_execution_id,\n    lock_acquired_at,\n    lock_expires_at,\n\n    status,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.id, $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -224,
+        -112
+      ],
+      "id": "e6a79f16-8722-4029-beb5-9e727b636e57",
+      "name": "Adquirir bloqueo WF-001",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3ded36ee-6920-44b1-9749-4ef3d3348095",
+              "leftValue": "={{ Boolean($json.id_del_proceso) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        720,
+        -112
+      ],
+      "id": "5b303f13-9e6b-4fd9-a936-c3a0687d038a",
+      "name": "¿SECOP devolvió procesos?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH cursor_snapshot AS (\n    SELECT\n        cursor_timestamp,\n        cursor_process_id,\n\n        COALESCE(\n            NULLIF(\n                metadata ->> 'current_execution_batches',\n                ''\n            )::INTEGER,\n            0\n        ) AS current_batches,\n\n        COALESCE(\n            NULLIF(\n                metadata ->> 'current_execution_records',\n                ''\n            )::BIGINT,\n            0\n        ) AS current_records\n\n    FROM ops.sync_cursors\n\n    WHERE source_code = 'SECOP_II_PROCESSES'\n      AND active_execution_id = $1::TEXT\n),\n\nrun_finished AS (\n    UPDATE ops.workflow_runs AS workflow_run\n    SET\n        status = 'success',\n        finished_at = NOW(),\n\n        batches_processed =\n            cursor_snapshot.current_batches,\n\n        records_read =\n            cursor_snapshot.current_records,\n\n        records_written =\n            cursor_snapshot.current_records,\n\n        cursor_end_timestamp =\n            cursor_snapshot.cursor_timestamp,\n\n        cursor_end_process_id =\n            cursor_snapshot.cursor_process_id,\n\n        completion_reason =\n            $2::TEXT,\n\n        error_node = NULL,\n        error_message = NULL,\n        error_details = '{}'::JSONB,\n\n        metadata =\n            COALESCE(\n                workflow_run.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'completion_reason',\n                $3::TEXT,\n\n                'finished_execution_id',\n                $4::TEXT,\n\n                'finished_at',\n                NOW()\n            ),\n\n        updated_at = NOW()\n\n    FROM cursor_snapshot\n\n    WHERE workflow_run.n8n_execution_id =\n        $5::TEXT\n\n    RETURNING\n        workflow_run.id,\n        workflow_run.n8n_execution_id,\n        workflow_run.status,\n        workflow_run.started_at,\n        workflow_run.finished_at,\n        workflow_run.batches_processed,\n        workflow_run.records_read,\n        workflow_run.records_written,\n        workflow_run.cursor_start_timestamp,\n        workflow_run.cursor_start_process_id,\n        workflow_run.cursor_end_timestamp,\n        workflow_run.cursor_end_process_id,\n        workflow_run.completion_reason\n),\n\ncursor_released AS (\n    UPDATE ops.sync_cursors\n    SET\n        active_execution_id = NULL,\n        lock_acquired_at = NULL,\n        lock_expires_at = NULL,\n\n        status = 'success',\n        last_success_at = NOW(),\n        error_message = NULL,\n\n        metadata =\n            (\n                COALESCE(metadata, '{}'::JSONB)\n                - 'current_execution_id'\n            )\n            || jsonb_build_object(\n                'last_completion_reason',\n                $6::TEXT,\n\n                'last_completed_execution_id',\n                $7::TEXT,\n\n                'last_completed_at',\n                NOW(),\n\n                'last_execution_batches',\n                COALESCE(\n                    NULLIF(\n                        metadata ->> 'current_execution_batches',\n                        ''\n                    )::INTEGER,\n                    0\n                ),\n\n                'last_execution_records',\n                COALESCE(\n                    NULLIF(\n                        metadata ->> 'current_execution_records',\n                        ''\n                    )::BIGINT,\n                    0\n                )\n            ),\n\n        updated_at = NOW()\n\n    WHERE source_code = 'SECOP_II_PROCESSES'\n      AND active_execution_id = $8::TEXT\n\n    RETURNING\n        source_code,\n        cursor_timestamp,\n        cursor_process_id,\n        status,\n        active_execution_id,\n        lock_acquired_at,\n        lock_expires_at,\n        last_success_at,\n        metadata,\n        updated_at\n)\n\nSELECT\n    cursor_released.source_code,\n    cursor_released.cursor_timestamp,\n    cursor_released.cursor_process_id,\n    cursor_released.status,\n    cursor_released.active_execution_id,\n    cursor_released.lock_acquired_at,\n    cursor_released.lock_expires_at,\n    cursor_released.last_success_at,\n    cursor_released.metadata,\n\n    run_finished.id AS workflow_run_id,\n    run_finished.n8n_execution_id,\n    run_finished.started_at,\n    run_finished.finished_at,\n    run_finished.batches_processed,\n    run_finished.records_read,\n    run_finished.records_written,\n    run_finished.cursor_start_timestamp,\n    run_finished.cursor_start_process_id,\n    run_finished.cursor_end_timestamp,\n    run_finished.cursor_end_process_id,\n    run_finished.completion_reason\n\nFROM cursor_released\nLEFT JOIN run_finished ON TRUE;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $json.completion_reason, $json.completion_reason, $execution.id, $execution.id, $json.completion_reason, $execution.id, $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        976,
+        368
+      ],
+      "id": "95c61611-07aa-4d8d-a3ec-4170a00ec014",
+      "name": "Liberar bloqueo WF-001",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs (\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n\n    cursor_start_timestamp,\n    cursor_start_process_id,\n\n    metadata,\n\n    created_at,\n    updated_at\n)\nVALUES (\n    'WF-001',\n    'SECOP_II_PROCESSES',\n    $1::TEXT,\n    $2::TEXT,\n    'running',\n    NOW(),\n\n    NULLIF(\n        $3::TEXT,\n        ''\n    )::TIMESTAMPTZ,\n\n    NULLIF(\n        $4::TEXT,\n        ''\n    ),\n\n    jsonb_build_object(\n        'workflow_name',\n        'WF-001 - Sincronización incremental SECOP II',\n\n        'lock_acquired_at',\n        NULLIF(\n            $5::TEXT,\n            ''\n        )::TIMESTAMPTZ,\n\n        'lock_expires_at',\n        NULLIF(\n            $6::TEXT,\n            ''\n        )::TIMESTAMPTZ\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (n8n_execution_id)\nDO UPDATE SET\n    status = 'running',\n    updated_at = NOW()\n\nRETURNING\n    id,\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    cursor_start_timestamp,\n    cursor_start_process_id,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.mode ?? \"unknown\", $json.cursor_timestamp ?? \"\", $json.cursor_process_id ?? \"\", $json.lock_acquired_at ?? \"\", $json.lock_expires_at ?? \"\" ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        176,
+        -112
+      ],
+      "id": "19cf231c-4ce8-4a26-9e17-0a5ab117ea2c",
+      "name": "Registrar inicio WF-001",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "fe7a1d0c-6364-4fef-abd4-47915d651e33",
+              "leftValue": "={{ String($json.active_execution_id || '') === String($execution.id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -16,
+        -112
+      ],
+      "id": "a158a70c-0e6e-4707-8fcc-ac6d456779b2",
+      "name": "¿Bloqueo adquirido?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs (\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    finished_at,\n    completion_reason,\n    metadata,\n    created_at,\n    updated_at\n)\nVALUES (\n    'WF-001',\n    'SECOP_II_PROCESSES',\n    $1::TEXT,\n    $2::TEXT,\n    'skipped',\n    NOW(),\n    NOW(),\n    'concurrent_execution',\n\n    jsonb_build_object(\n        'reason',\n        'Otra ejecución tiene un bloqueo vigente',\n\n        'attempted_execution_id',\n        $3::TEXT,\n\n        'registered_at',\n        NOW()\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (n8n_execution_id)\nDO UPDATE SET\n    status = 'skipped',\n    finished_at = NOW(),\n    completion_reason = 'concurrent_execution',\n\n    metadata =\n        COALESCE(\n            ops.workflow_runs.metadata,\n            '{}'::JSONB\n        )\n        || jsonb_build_object(\n            'reason',\n            'Otra ejecución tiene un bloqueo vigente',\n\n            'registered_at',\n            NOW()\n        ),\n\n    updated_at = NOW()\n\nRETURNING\n    id,\n    workflow_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    finished_at,\n    completion_reason,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.mode ?? \"unknown\", $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        176,
+        96
+      ],
+      "id": "9f43b758-c8cd-4e0d-bac2-6196243bc614",
+      "name": "Registrar ejecución omitida",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "828f8909-e913-4478-b031-ea1ab37412f2",
+              "name": "completion_reason",
+              "value": "no_changes",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1136,
+        128
+      ],
+      "id": "fb995d59-4390-4f99-9d34-90e6e1367feb",
+      "name": "Preparar cierre sin novedades"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e900ede6-6e85-4f4a-a6b0-ff6682124a5d",
+              "name": "completion_reason",
+              "value": "={{ Number($json.metadata?.last_batch_count ?? 0) < 1000 ? 'caught_up' : 'safety_limit_reached' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        544,
+        368
+      ],
+      "id": "b65577fc-8199-404c-b9b1-8827d93be027",
+      "name": "Preparar cierre de sincronización"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "requested_by_user_id"
+            },
+            {
+              "name": "process_id"
+            },
+            {
+              "name": "processing_mode"
+            },
+            {
+              "name": "orchestration_execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -640,
+        464
+      ],
+      "id": "c0000000-0000-4000-8000-001000000001",
+      "name": "Entrada desde WF-019"
+    },
+    {
+      "id": "b8154a6c-e94a-47b1-bd3e-6ab5c34ca965",
+      "name": "Actualización automática cada 5 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        -200
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c559da3d-4418-402a-80f8-79a41e3067ae",
+      "name": "Actualizar coincidencias después de SECOP",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1500,
+        400
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "CernoIAProdWF005",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH rewind AS (\n UPDATE ops.sync_cursors SET\n  metadata=COALESCE(metadata,'{}'::jsonb)||jsonb_build_object('last_reconciliation_at',NOW(),'source_high_watermark',GREATEST(cursor_timestamp,NULLIF(metadata->>'source_high_watermark','')::timestamptz)),\n  cursor_timestamp=cursor_timestamp-INTERVAL '7 days',cursor_process_id='',updated_at=NOW()\n WHERE source_code='SECOP_II_PROCESSES' AND active_execution_id=$1::text\n  AND cursor_timestamp IS NOT NULL\n  AND COALESCE(NULLIF(metadata->>'last_reconciliation_at','')::timestamptz,'1970-01-01')<NOW()-INTERVAL '24 hours'\n  AND cursor_timestamp>=NOW()-INTERVAL '4 days'\n RETURNING source_code\n) SELECT source_code FROM ops.sync_cursors WHERE source_code='SECOP_II_PROCESSES';",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -50,
+        0
+      ],
+      "id": "675782b8-32d2-4ff1-b7b6-77d3f72ed101",
+      "name": "Reconciliar publicaciones recientes",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "id": "dd355db1-f5fa-456d-abd1-9fd68ddb55fd",
+      "webhookId": "edf1ec19-d34e-4c5c-8213-2c02edf29ac4",
+      "name": "Entrada segura de sincronización SECOP",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -700,
+        400
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cernoia/secop/sync",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CernoIAProdWebhook",
+          "name": "CernoIA Webhook Secret"
+        }
+      }
+    },
+    {
+      "id": "5434a7ac-1ba0-48e9-801d-ea252ccd5366",
+      "name": "Confirmar lote guardado",
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        1098,
+        -128
+      ],
+      "parameters": {
+        "maxItems": 1
+      }
+    }
+  ],
+  "connections": {
+    "Inicio Manual": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-001",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar SECOP II": {
+      "main": [
+        [
+          {
+            "node": "¿SECOP devolvió procesos?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar proceso SECOP": {
+      "main": [
+        [
+          {
+            "node": "Guardar proceso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer cursor SECOP II": {
+      "main": [
+        [
+          {
+            "node": "Consultar SECOP II",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar proceso": {
+      "main": [
+        [
+          {
+            "node": "Confirmar lote guardado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar avance del cursor": {
+      "main": [
+        [
+          {
+            "node": "Actualizar cursor SECOP II",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Actualizar cursor SECOP II": {
+      "main": [
+        [
+          {
+            "node": "¿Hay otro lote?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay otro lote?": {
+      "main": [
+        [
+          {
+            "node": "Pausa entre lotes",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar cierre de sincronización",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pausa entre lotes": {
+      "main": [
+        [
+          {
+            "node": "Leer cursor SECOP II",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adquirir bloqueo WF-001": {
+      "main": [
+        [
+          {
+            "node": "¿Bloqueo adquirido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿SECOP devolvió procesos?": {
+      "main": [
+        [
+          {
+            "node": "Normalizar proceso SECOP",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar cierre sin novedades",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Liberar bloqueo WF-001": {
+      "main": [
+        [
+          {
+            "node": "Actualizar coincidencias después de SECOP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar inicio WF-001": {
+      "main": [
+        [
+          {
+            "node": "Reconciliar publicaciones recientes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Bloqueo adquirido?": {
+      "main": [
+        [
+          {
+            "node": "Registrar inicio WF-001",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar ejecución omitida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar cierre de sincronización": {
+      "main": [
+        [
+          {
+            "node": "Liberar bloqueo WF-001",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar cierre sin novedades": {
+      "main": [
+        [
+          {
+            "node": "Liberar bloqueo WF-001",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada desde WF-019": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-001",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Actualización automática cada 5 minutos": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-001",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reconciliar publicaciones recientes": {
+      "main": [
+        [
+          {
+            "node": "Leer cursor SECOP II",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada segura de sincronización SECOP": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-001",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmar lote guardado": {
+      "main": [
+        [
+          {
+            "node": "Preparar avance del cursor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Bogota",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "CernoIAProdWF007",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  }
+}

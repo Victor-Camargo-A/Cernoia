@@ -1,0 +1,791 @@
+{
+  "id": "CernoIAProdWF003",
+  "name": "[CernoIA PROD] WF-003 - Sincronización de metadatos de documentos SECOP II",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        16,
+        -288
+      ],
+      "id": "c368ded8-f5e4-4168-bed7-4cb7157b468e",
+      "name": "Inicio Manual WF-003"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input\n  .all()\n  .map((item) => item.json)\n  .filter((row) => row.secop_portfolio_id);\n\n// Evita consultar dos veces el mismo CO1.BDOS.\nconst uniquePortfolios = [\n  ...new Set(\n    rows.map((row) =>\n      String(row.secop_portfolio_id).trim()\n    )\n  ),\n];\n\nif (uniquePortfolios.length === 0) {\n  return [\n    {\n      json: {\n        has_candidates: false,\n        batch_count: 0,\n        portfolio_ids: [],\n        where_clause: '1 = 0',\n      },\n    },\n  ];\n}\n\n// Escapado para la consulta SoQL de Socrata.\nconst portfolioList = uniquePortfolios\n  .map((portfolioId) => {\n    const escaped = portfolioId.replace(/'/g, \"''\");\n    return `'${escaped}'`;\n  })\n  .join(', ');\n\nreturn [\n  {\n    json: {\n      has_candidates: true,\n      batch_count: uniquePortfolios.length,\n      portfolio_ids: uniquePortfolios,\n\n      where_clause:\n        `proceso IN (${portfolioList})`,\n\n      storage_policy: 'metadata_only',\n      binary_download_enabled: false,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        -288
+      ],
+      "id": "5f98ff5d-fd13-4c19-a95b-59526725ffbc",
+      "name": "Construir consulta documental WF-003"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ded57eb2-cac0-44fb-af0d-d2ebac93c128",
+              "leftValue": "={{ Boolean($json.has_candidates) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        992,
+        -32
+      ],
+      "id": "7c855137-f7fd-48cf-be5d-528cf40d9615",
+      "name": "¿Hay procesos para consultar WF-003?"
+    },
+    {
+      "parameters": {
+        "url": "https://www.datos.gov.co/resource/dmgg-8hin.json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "$where",
+              "value": "={{ $json.where_clause }}"
+            },
+            {
+              "name": "$order",
+              "value": "=proceso ASC, fecha_carga ASC, id_documento ASC"
+            },
+            {
+              "name": "$select",
+              "value": "=id_documento,proceso,n_mero_de_contrato,nombre_archivo,tamanno_archivo,extensi_n,descripci_n,fecha_carga,entidad,nit_entidad,url_descarga_documento"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 45000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1280,
+        -288
+      ],
+      "id": "1adb386e-e9d6-483a-bc81-61bc160bc8b4",
+      "name": "Consultar documentos seleccionados WF-003",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "maxTries": 5,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4d9e3f21-bd0a-4082-a883-8c48efa82ee1",
+              "leftValue": "={{ Boolean($json.id_documento) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1280,
+        -64
+      ],
+      "id": "07b58e8e-94fd-438d-b05f-eb3ca8e3d185",
+      "name": "¿Se encontraron documentos WF-003?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const candidates = $(\n  'Leer procesos pendientes de documentos'\n)\n  .all(0, $runIndex)\n  .map((item) => item.json)\n  .filter(\n    (row) =>\n      row.process_id &&\n      row.secop_portfolio_id\n  );\n\n// Recupera directamente la respuesta HTTP de esta vuelta.\n// No depende de si la entrada viene de Guardar documentos\n// o de la rama sin documentos.\nconst documents = $(\n  'Consultar documentos seleccionados WF-003'\n)\n  .all(0, $runIndex)\n  .map((item) => item.json)\n  .filter((row) => row.id_documento);\n\nconst documentCountByPortfolio = new Map();\n\nfor (const document of documents) {\n  const portfolioId = String(\n    document.proceso ?? ''\n  ).trim();\n\n  if (!portfolioId) {\n    continue;\n  }\n\n  const currentCount =\n    documentCountByPortfolio.get(portfolioId) ?? 0;\n\n  documentCountByPortfolio.set(\n    portfolioId,\n    currentCount + 1\n  );\n}\n\nconst escapeSql = (value) =>\n  String(value ?? '').replace(/'/g, \"''\");\n\nreturn candidates.map((row) => {\n  const portfolioId = String(\n    row.secop_portfolio_id ?? ''\n  ).trim();\n\n  const documentsFound =\n    documentCountByPortfolio.get(portfolioId) ?? 0;\n\n  const openingStatus = String(\n    row.opening_status ?? ''\n  ).toLowerCase();\n\n  const isOpen =\n    openingStatus.includes('abierto');\n\n  return {\n    json: {\n      process_id:\n        String(row.process_id),\n\n      secop_portfolio_id_sql:\n        escapeSql(portfolioId),\n\n      secop_process_id_sql:\n        escapeSql(row.secop_process_id),\n\n      reference_sql:\n        escapeSql(row.reference),\n\n      opening_status_sql:\n        escapeSql(row.opening_status),\n\n      process_status_sql:\n        escapeSql(row.process_status),\n\n      source_updated_at:\n        row.source_updated_at ?? '',\n\n      documents_found:\n        documentsFound,\n\n      scan_result:\n        documentsFound > 0\n          ? 'documents_found'\n          : 'no_documents_found',\n\n      next_scan_interval:\n        isOpen\n          ? '24 hours'\n          : '7 days',\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1840,
+        -80
+      ],
+      "id": "3a5fad99-73f9-4f73-a901-521d35c55e16",
+      "name": "Preparar resultados de escaneo WF-003"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.process_document_scan_state AS scan (\n    process_id,\n    secop_portfolio_id,\n    source_updated_at,\n\n    scan_status,\n    last_scanned_at,\n    next_scan_at,\n\n    attempts,\n    documents_found,\n    last_error,\n\n    metadata,\n\n    created_at,\n    updated_at\n)\nVALUES (\n    $1::UUID,\n\n    $2::TEXT,\n\n    NULLIF(\n        $3::TEXT,\n        ''\n    )::TIMESTAMPTZ,\n\n    'success',\n\n    NOW(),\n\n    NOW() + $4::INTERVAL,\n\n    1,\n\n    $5::BIGINT,\n\n    NULL,\n\n    jsonb_build_object(\n        'workflow_code',\n        'WF-003',\n\n        'secop_process_id',\n        $6::TEXT,\n\n        'reference',\n        $7::TEXT,\n\n        'opening_status',\n        $8::TEXT,\n\n        'process_status',\n        $9::TEXT,\n\n        'scan_result',\n        $10::TEXT,\n\n        'documents_found',\n        $11::BIGINT,\n\n        'storage_policy',\n        'metadata_only',\n\n        'binary_downloaded',\n        FALSE,\n\n        'scanned_at',\n        NOW()\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (process_id)\nDO UPDATE SET\n    secop_portfolio_id =\n        EXCLUDED.secop_portfolio_id,\n\n    source_updated_at =\n        EXCLUDED.source_updated_at,\n\n    scan_status =\n        'success',\n\n    last_scanned_at =\n        NOW(),\n\n    next_scan_at =\n        EXCLUDED.next_scan_at,\n\n    attempts =\n        scan.attempts + 1,\n\n    documents_found =\n        EXCLUDED.documents_found,\n\n    last_error =\n        NULL,\n\n    metadata =\n        COALESCE(\n            scan.metadata,\n            '{}'::JSONB\n        )\n        || EXCLUDED.metadata,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    process_id,\n    secop_portfolio_id,\n    scan_status,\n\n    last_scanned_at,\n    next_scan_at,\n\n    attempts,\n    documents_found,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $json.process_id, $json.secop_portfolio_id_sql, $json.source_updated_at, $json.next_scan_interval, Number($json.documents_found), $json.secop_process_id_sql, $json.reference_sql, $json.opening_status_sql, $json.process_status_sql, $json.scan_result, Number($json.documents_found) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2016,
+        -80
+      ],
+      "id": "9f212f4e-a54e-4fce-a60a-12304e6b4683",
+      "name": "Registrar resultado de escaneo WF-003",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Los elementos recibidos son los procesos cuyo resultado\n// de escaneo ya fue registrado en PostgreSQL.\nconst scans = $input\n  .all()\n  .map((item) => item.json);\n\n// Recupera exclusivamente la respuesta HTTP correspondiente\n// a la vuelta actual del ciclo.\nconst documentItems = $(\n  'Consultar documentos seleccionados WF-003'\n)\n  .all(0, $runIndex)\n  .map((item) => item.json);\n\n// Cuando SECOP devuelve [], Always Output Data genera\n// un elemento vacío. Solo contamos filas con id_documento.\nconst documents = documentItems.filter(\n  (document) => document.id_documento\n);\n\nreturn [\n  {\n    json: {\n      batch_number: $runIndex + 1,\n\n      batch_process_count:\n        scans.length,\n\n      batch_document_count:\n        documents.length,\n\n      batch_completed_at:\n        new Date().toISOString(),\n\n      storage_policy:\n        'metadata_only',\n\n      binary_download_enabled:\n        false,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        160
+      ],
+      "id": "448d9a9d-b1e5-40b7-aff1-7709e27ad1ee",
+      "name": "Preparar control de lote WF-003"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c44bac6a-fb3a-4832-be7d-c856bd8166cc",
+              "leftValue": "={{ Number($json.metadata?.last_batch_process_count ?? 0) }}",
+              "rightValue": "={{ 25 }}",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "9ce519ab-f0f4-465a-ba60-7adf1fcaab85",
+              "leftValue": "={{ $runIndex }}",
+              "rightValue": "={{ 2 }}",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1792,
+        160
+      ],
+      "id": "796b8790-ec52-442c-a261-dcf21f90a1c9",
+      "name": "¿Hay otro lote WF-003?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        512,
+        -16
+      ],
+      "id": "bfab3ec7-8911-46be-ac02-5a8c8229e15a",
+      "name": "Pausa entre lotes WF-003",
+      "webhookId": "c32ab438-f833-4e77-9384-c2b036d760d1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH process_candidates AS (\n    SELECT\n        process.id AS process_id,\n\n        process.secop_process_id,\n        process.reference,\n        process.process_name,\n\n        NULLIF(\n            process.raw_json\n                ->> 'id_del_portafolio',\n            ''\n        ) AS secop_portfolio_id,\n\n        COALESCE(\n            NULLIF(\n                process.raw_json\n                    ->> 'fecha_de_ultima_publicaci',\n                ''\n            )::TIMESTAMPTZ,\n\n            process.updated_at\n        ) AS source_updated_at,\n\n        process.raw_json\n            ->> 'estado_de_apertura_del_proceso'\n            AS opening_status,\n\n        process.raw_json\n            ->> 'estado_del_procedimiento'\n            AS process_status\n\n    FROM secop.processes AS process\n\n    WHERE process.raw_json IS NOT NULL\n      AND (EXISTS (SELECT 1 FROM saas.process_matches m WHERE m.process_id=process.id)\n        OR (COALESCE(process.awarded,FALSE)=FALSE AND process.response_deadline >= NOW()))\n\n      AND NULLIF(\n          process.raw_json\n              ->> 'id_del_portafolio',\n          ''\n      ) IS NOT NULL\n)\n\nSELECT\n    candidate.process_id,\n    candidate.secop_process_id,\n    candidate.reference,\n    candidate.process_name,\n\n    candidate.secop_portfolio_id,\n    candidate.source_updated_at,\n\n    candidate.opening_status,\n    candidate.process_status,\n\n    scan.scan_status,\n    scan.last_scanned_at,\n    scan.next_scan_at,\n    scan.attempts,\n    scan.documents_found\n\nFROM process_candidates AS candidate\n\nLEFT JOIN ops.process_document_scan_state AS scan\n    ON scan.process_id =\n       candidate.process_id\n\nWHERE\n    (\n        candidate.opening_status\n            ILIKE 'Abierto'\n\n        OR candidate.source_updated_at >=\n            NOW() - INTERVAL '180 days'\n    )\n\n  AND (\n      scan.process_id IS NULL\n\n      OR scan.scan_status = 'failed'\n\n      OR candidate.source_updated_at >\n          COALESCE(\n              scan.source_updated_at,\n              '1970-01-01 00:00:00+00'\n                  ::TIMESTAMPTZ\n          )\n\n      OR (\n          scan.next_scan_at IS NOT NULL\n          AND scan.next_scan_at <= NOW()\n      )\n  )\n\nORDER BY\n    CASE\n        WHEN scan.process_id IS NULL\n            THEN 0\n        ELSE 1\n    END ASC,\n\n    candidate.source_updated_at DESC,\n    candidate.secop_process_id ASC\n\nLIMIT 25;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        832,
+        -288
+      ],
+      "id": "6886e01f-9f09-44d4-a8dc-e973ded5bf71",
+      "name": "Leer procesos pendientes de documentos",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ops.sync_cursors AS cursor\nSET\n    active_execution_id =\n        $1::TEXT,\n\n    lock_acquired_at =\n        NOW(),\n\n    lock_expires_at =\n        NOW() + INTERVAL '30 minutes',\n\n    status =\n        'running',\n\n    last_run_at =\n        NOW(),\n\n    error_message =\n        NULL,\n\n    metadata =\n        COALESCE(\n            cursor.metadata,\n            '{}'::JSONB\n        )\n        || jsonb_build_object(\n            'workflow_code',\n            'WF-003',\n\n            'current_execution_id',\n            $2::TEXT,\n\n            'current_execution_batches',\n            0,\n\n            'current_execution_processes',\n            0,\n\n            'current_execution_documents',\n            0,\n\n            'current_execution_started_at',\n            NOW(),\n\n            'storage_policy',\n            'metadata_only',\n\n            'binary_download_enabled',\n            FALSE\n        ),\n\n    updated_at =\n        NOW()\n\nWHERE cursor.source_code =\n    'SECOP_II_DOCUMENTS_2025'\n\n  AND (\n      cursor.active_execution_id IS NULL\n\n      OR cursor.lock_expires_at IS NULL\n\n      OR cursor.lock_expires_at <= NOW()\n\n      OR cursor.active_execution_id::TEXT =\n          $3::TEXT\n  )\n\nRETURNING\n    cursor.source_code,\n    cursor.cursor_timestamp,\n    cursor.cursor_process_id,\n\n    cursor.active_execution_id,\n    cursor.lock_acquired_at,\n    cursor.lock_expires_at,\n\n    cursor.status,\n    cursor.records_processed,\n    cursor.metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.id, $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        224,
+        -288
+      ],
+      "id": "4e56d689-4996-43e2-b8cb-89fb189fd448",
+      "name": "Adquirir bloqueo WF-003",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c8948d29-3536-4d83-a740-5947ba30f97a",
+              "leftValue": "={{ String($json.active_execution_id || '') === String($execution.id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        288,
+        -32
+      ],
+      "id": "40425103-8fab-4136-992f-3bc4579c1d97",
+      "name": "¿Bloqueo WF-003 adquirido?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs (\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n\n    started_at,\n\n    cursor_start_timestamp,\n    cursor_start_process_id,\n\n    metadata,\n\n    created_at,\n    updated_at\n)\nVALUES (\n    'WF-003',\n    'SECOP_II_DOCUMENTS_2025',\n    $1::TEXT,\n    $2::TEXT,\n    'running',\n\n    NOW(),\n\n    NULLIF(\n        $3::TEXT,\n        ''\n    )::TIMESTAMPTZ,\n\n    NULLIF(\n        $4::TEXT,\n        ''\n    ),\n\n    jsonb_build_object(\n        'workflow_name',\n        'WF-003 - Sincronización de metadatos de documentos SECOP II',\n\n        'storage_policy',\n        'metadata_only',\n\n        'binary_download_enabled',\n        FALSE,\n\n        'batch_size',\n        25,\n\n        'max_processes_per_run',\n        500,\n\n        'lock_acquired_at',\n        NULLIF(\n            $5::TEXT,\n            ''\n        )::TIMESTAMPTZ,\n\n        'lock_expires_at',\n        NULLIF(\n            $6::TEXT,\n            ''\n        )::TIMESTAMPTZ\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (n8n_execution_id)\nDO UPDATE SET\n    workflow_code =\n        'WF-003',\n\n    source_code =\n        'SECOP_II_DOCUMENTS_2025',\n\n    status =\n        'running',\n\n    finished_at =\n        NULL,\n\n    completion_reason =\n        NULL,\n\n    error_node =\n        NULL,\n\n    error_message =\n        NULL,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    id,\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    cursor_start_timestamp,\n    cursor_start_process_id,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.mode ?? \"unknown\", $json.cursor_timestamp ?? \"\", $json.cursor_process_id ?? \"\", $json.lock_acquired_at ?? \"\", $json.lock_expires_at ?? \"\" ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        400,
+        -288
+      ],
+      "id": "40edc924-172e-40f5-be90-404153bf4e65",
+      "name": "Registrar inicio WF-003",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs (\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n\n    started_at,\n    finished_at,\n\n    completion_reason,\n    metadata,\n\n    created_at,\n    updated_at\n)\n\nSELECT\n    'WF-003',\n    'SECOP_II_DOCUMENTS_2025',\n    $1::TEXT,\n    $2::TEXT,\n    'skipped',\n\n    NOW(),\n    NOW(),\n\n    'concurrent_execution',\n\n    jsonb_build_object(\n        'reason',\n        'Otra ejecución del WF-003 tiene un bloqueo vigente',\n\n        'attempted_execution_id',\n        $3::TEXT,\n\n        'blocking_execution_id',\n        cursor.active_execution_id,\n\n        'lock_acquired_at',\n        cursor.lock_acquired_at,\n\n        'lock_expires_at',\n        cursor.lock_expires_at,\n\n        'storage_policy',\n        'metadata_only',\n\n        'registered_at',\n        NOW()\n    ),\n\n    NOW(),\n    NOW()\n\nFROM ops.sync_cursors AS cursor\n\nWHERE cursor.source_code =\n    'SECOP_II_DOCUMENTS_2025'\n\nON CONFLICT (n8n_execution_id)\nDO UPDATE SET\n    status =\n        'skipped',\n\n    finished_at =\n        NOW(),\n\n    completion_reason =\n        'concurrent_execution',\n\n    metadata =\n        COALESCE(\n            ops.workflow_runs.metadata,\n            '{}'::JSONB\n        )\n        || EXCLUDED.metadata,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    id,\n    workflow_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    finished_at,\n    completion_reason,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.mode ?? \"unknown\", $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        224
+      ],
+      "id": "4868dce1-95d6-43ce-a82c-8746ea4f4b74",
+      "name": "Registrar ejecución omitida WF-003",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH cursor_updated AS (\n    UPDATE ops.sync_cursors AS cursor\n\n    SET\n        status =\n            'running',\n\n        last_run_at =\n            NOW(),\n\n        lock_expires_at =\n            NOW() + INTERVAL '30 minutes',\n\n        records_processed =\n            COALESCE(\n                cursor.records_processed,\n                0\n            )\n            + $1::BIGINT,\n\n        error_message =\n            NULL,\n\n        metadata =\n            COALESCE(\n                cursor.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'workflow_code',\n                'WF-003',\n\n                'current_execution_id',\n                $2::TEXT,\n\n                'current_execution_batches',\n                COALESCE(\n                    NULLIF(\n                        cursor.metadata\n                            ->> 'current_execution_batches',\n                        ''\n                    )::INTEGER,\n                    0\n                ) + 1,\n\n                'current_execution_processes',\n                COALESCE(\n                    NULLIF(\n                        cursor.metadata\n                            ->> 'current_execution_processes',\n                        ''\n                    )::BIGINT,\n                    0\n                )\n                + $3::BIGINT,\n\n                'current_execution_documents',\n                COALESCE(\n                    NULLIF(\n                        cursor.metadata\n                            ->> 'current_execution_documents',\n                        ''\n                    )::BIGINT,\n                    0\n                )\n                + $4::BIGINT,\n\n                'last_batch_number',\n                $5::BIGINT,\n\n                'last_batch_process_count',\n                $6::BIGINT,\n\n                'last_batch_document_count',\n                $7::BIGINT,\n\n                'lock_renewed_at',\n                NOW(),\n\n                'storage_policy',\n                'metadata_only',\n\n                'binary_download_enabled',\n                FALSE\n            ),\n\n        updated_at =\n            NOW()\n\n    WHERE cursor.source_code =\n        'SECOP_II_DOCUMENTS_2025'\n\n      AND cursor.active_execution_id::TEXT =\n        $8::TEXT\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n\n        cursor.records_processed,\n        cursor.metadata,\n        cursor.updated_at\n),\n\nrun_updated AS (\n    UPDATE ops.workflow_runs AS run\n\n    SET\n        batches_processed =\n            COALESCE(\n                run.batches_processed,\n                0\n            ) + 1,\n\n        records_read =\n            COALESCE(\n                run.records_read,\n                0\n            )\n            + $9::BIGINT,\n\n        records_written =\n            COALESCE(\n                run.records_written,\n                0\n            )\n            + $10::BIGINT,\n\n        metadata =\n            COALESCE(\n                run.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'last_batch_number',\n                $11::BIGINT,\n\n                'last_batch_process_count',\n                $12::BIGINT,\n\n                'last_batch_document_count',\n                $13::BIGINT,\n\n                'last_batch_completed_at',\n                NOW(),\n\n                'storage_policy',\n                'metadata_only',\n\n                'binary_download_enabled',\n                FALSE\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM cursor_updated\n\n    WHERE run.n8n_execution_id =\n        $14::TEXT\n\n      AND run.workflow_code =\n        'WF-003'\n\n      AND run.status =\n        'running'\n\n    RETURNING\n        run.id,\n        run.n8n_execution_id,\n        run.status,\n\n        run.batches_processed,\n        run.records_read,\n        run.records_written,\n\n        run.metadata,\n        run.updated_at\n)\n\nSELECT\n    cursor_updated.source_code,\n    cursor_updated.status,\n\n    cursor_updated.active_execution_id,\n    cursor_updated.lock_acquired_at,\n    cursor_updated.lock_expires_at,\n\n    cursor_updated.records_processed,\n    cursor_updated.metadata,\n\n    run_updated.id\n        AS workflow_run_id,\n\n    run_updated.n8n_execution_id,\n    run_updated.batches_processed,\n    run_updated.records_read,\n    run_updated.records_written,\n\n    run_updated.updated_at\n        AS workflow_run_updated_at\n\nFROM cursor_updated\n\nLEFT JOIN run_updated\n    ON TRUE;",
+        "options": {
+          "queryReplacement": "={{ [ Number($json.batch_process_count), $execution.id, Number($json.batch_process_count), Number($json.batch_document_count), Number($json.batch_number), Number($json.batch_process_count), Number($json.batch_document_count), $execution.id, Number($json.batch_process_count), Number($json.batch_document_count), Number($json.batch_number), Number($json.batch_process_count), Number($json.batch_document_count), $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1600,
+        160
+      ],
+      "id": "035f78f4-bc97-485a-97ac-b37a06d35aaf",
+      "name": "Actualizar ejecución WF-003",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "24be9e57-3dc8-4fb7-8cfc-9e9079b44613",
+              "name": "completion_reason",
+              "value": "no_candidates",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        752,
+        192
+      ],
+      "id": "0635ebcb-cb8a-47e2-a668-0d6000fc6f4f",
+      "name": "Preparar cierre sin candidatos WF-003"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "623d75f0-e113-48f2-9fab-e09e45fdfb1f",
+              "name": "completion_reason",
+              "value": "={{\n  Number(\n    $json.metadata?.last_batch_process_count ?? 0\n  ) < 25\n    ? 'caught_up'\n    : 'safety_limit_reached'\n}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2032,
+        176
+      ],
+      "id": "73273ac6-f05f-4520-99ab-f06bbefdbc32",
+      "name": "Preparar cierre de sincronización WF-003"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH cursor_snapshot AS (\n    SELECT\n        cursor.cursor_timestamp,\n        cursor.cursor_process_id,\n\n        COALESCE(\n            NULLIF(\n                cursor.metadata\n                    ->> 'current_execution_batches',\n                ''\n            )::INTEGER,\n            0\n        ) AS current_batches,\n\n        COALESCE(\n            NULLIF(\n                cursor.metadata\n                    ->> 'current_execution_processes',\n                ''\n            )::BIGINT,\n            0\n        ) AS current_processes,\n\n        COALESCE(\n            NULLIF(\n                cursor.metadata\n                    ->> 'current_execution_documents',\n                ''\n            )::BIGINT,\n            0\n        ) AS current_documents\n\n    FROM ops.sync_cursors AS cursor\n\n    WHERE cursor.source_code =\n        'SECOP_II_DOCUMENTS_2025'\n\n      AND cursor.active_execution_id::TEXT =\n        $1::TEXT\n),\n\nrun_finished AS (\n    UPDATE ops.workflow_runs AS run\n\n    SET\n        status =\n            'success',\n\n        finished_at =\n            NOW(),\n\n        batches_processed =\n            GREATEST(\n                COALESCE(\n                    run.batches_processed,\n                    0\n                ),\n                cursor_snapshot.current_batches\n            ),\n\n        records_read =\n            GREATEST(\n                COALESCE(\n                    run.records_read,\n                    0\n                ),\n                cursor_snapshot.current_processes\n            ),\n\n        records_written =\n            GREATEST(\n                COALESCE(\n                    run.records_written,\n                    0\n                ),\n                cursor_snapshot.current_documents\n            ),\n\n        cursor_end_timestamp =\n            cursor_snapshot.cursor_timestamp,\n\n        cursor_end_process_id =\n            cursor_snapshot.cursor_process_id,\n\n        completion_reason =\n            $2::TEXT,\n\n        error_node =\n            NULL,\n\n        error_message =\n            NULL,\n\n        error_details =\n            '{}'::JSONB,\n\n        metadata =\n            COALESCE(\n                run.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'completion_reason',\n                $3::TEXT,\n\n                'processes_scanned',\n                cursor_snapshot.current_processes,\n\n                'documents_found',\n                cursor_snapshot.current_documents,\n\n                'storage_policy',\n                'metadata_only',\n\n                'binary_download_enabled',\n                FALSE,\n\n                'finished_execution_id',\n                $4::TEXT,\n\n                'finished_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM cursor_snapshot\n\n    WHERE run.n8n_execution_id =\n        $5::TEXT\n\n      AND run.workflow_code =\n        'WF-003'\n\n    RETURNING\n        run.id,\n        run.n8n_execution_id,\n        run.status,\n\n        run.started_at,\n        run.finished_at,\n\n        run.batches_processed,\n        run.records_read,\n        run.records_written,\n\n        run.completion_reason,\n        run.metadata\n),\n\ncursor_released AS (\n    UPDATE ops.sync_cursors AS cursor\n\n    SET\n        active_execution_id =\n            NULL,\n\n        lock_acquired_at =\n            NULL,\n\n        lock_expires_at =\n            NULL,\n\n        status =\n            'success',\n\n        last_success_at =\n            NOW(),\n\n        error_message =\n            NULL,\n\n        metadata =\n            (\n                (\n                    (\n                        (\n                            (\n                                COALESCE(\n                                    cursor.metadata,\n                                    '{}'::JSONB\n                                )\n                                - 'current_execution_id'\n                            )\n                            - 'current_execution_batches'\n                        )\n                        - 'current_execution_processes'\n                    )\n                    - 'current_execution_documents'\n                )\n                - 'current_execution_started_at'\n            )\n            || jsonb_build_object(\n                'workflow_code',\n                'WF-003',\n\n                'last_completion_reason',\n                $6::TEXT,\n\n                'last_completed_execution_id',\n                $7::TEXT,\n\n                'last_execution_batches',\n                cursor_snapshot.current_batches,\n\n                'last_execution_processes',\n                cursor_snapshot.current_processes,\n\n                'last_execution_documents',\n                cursor_snapshot.current_documents,\n\n                'storage_policy',\n                'metadata_only',\n\n                'binary_download_enabled',\n                FALSE,\n\n                'last_completed_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM cursor_snapshot\n\n    WHERE cursor.source_code =\n        'SECOP_II_DOCUMENTS_2025'\n\n      AND cursor.active_execution_id::TEXT =\n        $8::TEXT\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n\n        cursor.records_processed,\n        cursor.last_success_at,\n        cursor.metadata,\n        cursor.updated_at\n)\n\nSELECT\n    cursor_released.source_code,\n    cursor_released.status,\n\n    cursor_released.active_execution_id,\n    cursor_released.lock_acquired_at,\n    cursor_released.lock_expires_at,\n\n    cursor_released.records_processed,\n    cursor_released.last_success_at,\n    cursor_released.metadata,\n\n    run_finished.id\n        AS workflow_run_id,\n\n    run_finished.n8n_execution_id,\n    run_finished.started_at,\n    run_finished.finished_at,\n\n    run_finished.batches_processed,\n    run_finished.records_read,\n    run_finished.records_written,\n\n    run_finished.completion_reason\n\nFROM cursor_released\n\nLEFT JOIN run_finished\n    ON TRUE;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $json.completion_reason, $json.completion_reason, $execution.id, $execution.id, $json.completion_reason, $execution.id, $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1056,
+        192
+      ],
+      "id": "e682e4a8-2203-443e-93b7-f4eb0f32a085",
+      "name": "Finalizar WF-003 y liberar bloqueo",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const documents = $input\n  .all()\n  .map((item) => item.json)\n  .filter((row) => row.id_documento);\n\nconst candidates =\n  $('Leer procesos pendientes de documentos')\n    .all()\n    .map((item) => item.json);\n\nconst candidatesByPortfolio =\n  new Map(\n    candidates\n      .filter(\n        (row) =>\n          row.secop_portfolio_id\n          && row.process_id\n      )\n      .map((row) => [\n        String(\n          row.secop_portfolio_id\n        ).trim(),\n\n        row,\n      ])\n  );\n\nreturn documents.map((document) => {\n  const portfolioId =\n    String(\n      document.proceso\n      ?? ''\n    ).trim();\n\n  const process =\n    candidatesByPortfolio.get(\n      portfolioId\n    )\n    ?? {};\n\n  const rawDownloadUrl =\n    document.url_descarga_documento;\n\n  const downloadUrl =\n    rawDownloadUrl\n    && typeof rawDownloadUrl === 'object'\n    && !Array.isArray(rawDownloadUrl)\n      ? rawDownloadUrl\n      : rawDownloadUrl\n        ? {\n            url:\n              String(rawDownloadUrl),\n          }\n        : {};\n\n  const parsedFileSize =\n    Number(\n      document.tamanno_archivo\n    );\n\n  const normalizedFileSize =\n    Number.isSafeInteger(\n      parsedFileSize\n    )\n    && parsedFileSize >= 0\n      ? parsedFileSize\n      : null;\n\n  const uploadedAt =\n    document.fecha_carga\n      ? String(\n          document.fecha_carga\n        )\n      : null;\n\n  const normalized = {\n    external_document_id:\n      String(\n        document.id_documento\n      ),\n\n    process_id:\n      process.process_id\n        ? String(\n            process.process_id\n          )\n        : '',\n\n    secop_process_id:\n      process.secop_process_id\n        ? String(\n            process.secop_process_id\n          )\n        : '',\n\n    secop_portfolio_id:\n      portfolioId,\n\n    contract_number:\n      document.n_mero_de_contrato\n      ?? null,\n\n    file_name:\n      document.nombre_archivo\n      ?? null,\n\n    file_size_bytes:\n      normalizedFileSize,\n\n    file_extension:\n      String(\n        document.extensi_n\n        ?? ''\n      )\n        .trim()\n        .toLowerCase()\n        || null,\n\n    description:\n      document.descripci_n\n      ?? null,\n\n    uploaded_at:\n      uploadedAt,\n\n    entity_name:\n      document.entidad\n      ?? null,\n\n    entity_nit:\n      document.nit_entidad\n      ?? null,\n\n    download_url:\n      downloadUrl,\n\n    download_url_text:\n      downloadUrl.url\n      ?? null,\n\n    raw_json:\n      document,\n  };\n\n  return {\n    json: {\n      ...normalized,\n\n      query_parameters: [\n        normalized.external_document_id,\n        normalized.process_id,\n        normalized.secop_portfolio_id,\n        normalized.contract_number,\n        normalized.file_name,\n        normalized.file_size_bytes,\n        normalized.file_extension,\n        normalized.description,\n        normalized.uploaded_at,\n        normalized.entity_name,\n        normalized.entity_nit,\n        JSON.stringify(\n          normalized.download_url\n          ?? {}\n        ),\n        normalized.download_url_text,\n        JSON.stringify(\n          normalized.raw_json\n          ?? {}\n        ),\n      ],\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1488,
+        -224
+      ],
+      "id": "fae7d35b-ab1f-4018-9ff0-c7d8a3c1b0d8",
+      "name": "Normalizar documentos WF-003"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO secop.process_documents AS document (\n    external_document_id,\n    process_id,\n    secop_portfolio_id,\n\n    contract_number,\n    file_name,\n    file_size_bytes,\n    file_extension,\n    description,\n    uploaded_at,\n\n    entity_name,\n    entity_nit,\n\n    download_url,\n    download_url_text,\n\n    download_policy,\n    relevance_status,\n    download_status,\n    extraction_status,\n\n    raw_json,\n\n    first_seen_at,\n    last_seen_at,\n    created_at,\n    updated_at\n)\n\nVALUES (\n    $1::TEXT,\n\n    COALESCE(\n        NULLIF(\n            $2::TEXT,\n            ''\n        )::UUID,\n\n        (\n            SELECT\n                process.id\n\n            FROM secop.processes\n                AS process\n\n            WHERE process.raw_json\n                    ->> 'id_del_portafolio'\n                  =\n                  $3::TEXT\n\n            ORDER BY\n                process.updated_at DESC,\n                process.id ASC\n\n            LIMIT 1\n        )\n    ),\n\n    $3::TEXT,\n\n    NULLIF(\n        $4::TEXT,\n        ''\n    ),\n\n    NULLIF(\n        $5::TEXT,\n        ''\n    ),\n\n    NULLIF(\n        $6::TEXT,\n        ''\n    )::BIGINT,\n\n    NULLIF(\n        $7::TEXT,\n        ''\n    ),\n\n    NULLIF(\n        $8::TEXT,\n        ''\n    ),\n\n    NULLIF(\n        $9::TEXT,\n        ''\n    )::TIMESTAMPTZ,\n\n    NULLIF(\n        $10::TEXT,\n        ''\n    ),\n\n    NULLIF(\n        $11::TEXT,\n        ''\n    ),\n\n    COALESCE(\n        NULLIF(\n            $12::TEXT,\n            ''\n        ),\n        '{}'\n    )::JSONB,\n\n    NULLIF(\n        $13::TEXT,\n        ''\n    ),\n\n    'metadata_only',\n    'pending',\n    'not_requested',\n    'not_requested',\n\n    COALESCE(\n        NULLIF(\n            $14::TEXT,\n            ''\n        ),\n        '{}'\n    )::JSONB,\n\n    NOW(),\n    NOW(),\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (external_document_id)\nDO UPDATE SET\n    process_id =\n        COALESCE(\n            EXCLUDED.process_id,\n            document.process_id\n        ),\n\n    secop_portfolio_id =\n        EXCLUDED.secop_portfolio_id,\n\n    contract_number =\n        EXCLUDED.contract_number,\n\n    file_name =\n        EXCLUDED.file_name,\n\n    file_size_bytes =\n        EXCLUDED.file_size_bytes,\n\n    file_extension =\n        EXCLUDED.file_extension,\n\n    description =\n        EXCLUDED.description,\n\n    uploaded_at =\n        EXCLUDED.uploaded_at,\n\n    entity_name =\n        EXCLUDED.entity_name,\n\n    entity_nit =\n        EXCLUDED.entity_nit,\n\n    download_url =\n        EXCLUDED.download_url,\n\n    download_url_text =\n        EXCLUDED.download_url_text,\n\n    raw_json =\n        EXCLUDED.raw_json,\n\n    last_seen_at =\n        NOW(),\n\n    updated_at =\n        NOW()\n\nRETURNING\n    id,\n    external_document_id,\n    process_id,\n    secop_portfolio_id,\n\n    file_name,\n    file_size_bytes,\n    file_extension,\n\n    download_policy,\n    download_status,\n    extraction_status,\n\n    first_seen_at,\n    last_seen_at;",
+        "options": {
+          "queryReplacement": "={{ $json.query_parameters }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1664,
+        -224
+      ],
+      "id": "f0202e06-f52b-4850-81d2-2d508278eb30",
+      "name": "Guardar documentos WF-003",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "requested_by_user_id"
+            },
+            {
+              "name": "process_id"
+            },
+            {
+              "name": "processing_mode"
+            },
+            {
+              "name": "orchestration_execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -544,
+        448
+      ],
+      "id": "c0000000-0000-4000-8000-003000000001",
+      "name": "Entrada desde WF-019"
+    }
+  ],
+  "connections": {
+    "Inicio Manual WF-003": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir consulta documental WF-003": {
+      "main": [
+        [
+          {
+            "node": "¿Hay procesos para consultar WF-003?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay procesos para consultar WF-003?": {
+      "main": [
+        [
+          {
+            "node": "Consultar documentos seleccionados WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar cierre sin candidatos WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar documentos seleccionados WF-003": {
+      "main": [
+        [
+          {
+            "node": "¿Se encontraron documentos WF-003?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Se encontraron documentos WF-003?": {
+      "main": [
+        [
+          {
+            "node": "Normalizar documentos WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar resultados de escaneo WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar resultados de escaneo WF-003": {
+      "main": [
+        [
+          {
+            "node": "Registrar resultado de escaneo WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar resultado de escaneo WF-003": {
+      "main": [
+        [
+          {
+            "node": "Preparar control de lote WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar control de lote WF-003": {
+      "main": [
+        [
+          {
+            "node": "Actualizar ejecución WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay otro lote WF-003?": {
+      "main": [
+        [
+          {
+            "node": "Pausa entre lotes WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar cierre de sincronización WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pausa entre lotes WF-003": {
+      "main": [
+        [
+          {
+            "node": "Leer procesos pendientes de documentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer procesos pendientes de documentos": {
+      "main": [
+        [
+          {
+            "node": "Construir consulta documental WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adquirir bloqueo WF-003": {
+      "main": [
+        [
+          {
+            "node": "¿Bloqueo WF-003 adquirido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Bloqueo WF-003 adquirido?": {
+      "main": [
+        [
+          {
+            "node": "Registrar inicio WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar ejecución omitida WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar inicio WF-003": {
+      "main": [
+        [
+          {
+            "node": "Leer procesos pendientes de documentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Actualizar ejecución WF-003": {
+      "main": [
+        [
+          {
+            "node": "¿Hay otro lote WF-003?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar cierre de sincronización WF-003": {
+      "main": [
+        [
+          {
+            "node": "Finalizar WF-003 y liberar bloqueo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar cierre sin candidatos WF-003": {
+      "main": [
+        [
+          {
+            "node": "Finalizar WF-003 y liberar bloqueo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar documentos WF-003": {
+      "main": [
+        [
+          {
+            "node": "Guardar documentos WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar documentos WF-003": {
+      "main": [
+        [
+          {
+            "node": "Preparar resultados de escaneo WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada desde WF-019": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-003",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "CernoIAProdWF007",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Bogota",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

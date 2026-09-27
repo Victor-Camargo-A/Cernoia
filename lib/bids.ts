@@ -1,0 +1,7 @@
+export function bidDocumentName(name:string){return name.replace(/ · [0-9a-f]{8} · [0-9a-f]{8}$/i,"");}
+export type BidMatrixDocument={id:string;process_document_id:string;filename:string;content_hash:string|null;status:string;document_role:string;effective_role:string;summary:string|null;error_message:string|null;source_url:string|null;facts:Array<{category:string;label:string;value:string;quote:string}>};
+export type BidTemplate={id:string;name:string;template_type:string;public_insight_id:string|null;current_version:number;version_id:string;template_version_id:string|null;generated_id:string|null;generated_status:string|null;file_hash_sha256:string|null;validation_issues:Array<{field:string;code:string}>|null;approved:boolean;reviewed_at:string|null;page_count:number|null;storage_url:string|null};
+export type BidWorkspace={workspace:{id:string;created_at:string}|null;can_start?:boolean;matrix?:{id:string;status:string;stale:boolean;revision_hash:string;documents:BidMatrixDocument[]}|null;templates?:BidTemplate[];supports?:Array<{id:string;document_name:string;file_hash_sha256:string;expiration_date:string|null;mime_type:string}>;blockers?:string[]};
+
+export type AnnexCatalogEntry={id:string;document_id:string;filename:string;archive_name:string|null;role:'fillable'|'informative'|'unknown';supported:boolean;preview_endpoint:string;requirement_ids:string[]};
+export type AnnexCatalog={entries:AnnexCatalogEntry[];warnings:Array<{document_id:string;filename:string;message:string}>};

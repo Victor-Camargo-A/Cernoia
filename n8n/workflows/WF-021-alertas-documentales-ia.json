@@ -1,0 +1,566 @@
+{
+  "id": "CernoIAProdWF021",
+  "name": "[CernoIA PROD] WF-021 — Alertas documentales inteligentes",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -880,
+        -160
+      ],
+      "id": "02100000-0000-4000-8000-000000000001",
+      "name": "Cada día 07:00 Bogotá WF-021",
+      "disabled": false
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -880,
+        32
+      ],
+      "id": "021000000-0000-4000-8000-000000000002",
+      "name": "Entrada desde otro workflow WF-021"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -880,
+        208
+      ],
+      "id": "021000000-0000-4000-8000-000000000003",
+      "name": "Inicio Manual WF-021"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH candidates AS (\n  SELECT document.organization_id, document.id AS organization_document_id,\n         CASE\n           WHEN document.expiration_date < CURRENT_DATE THEN 'expired'\n           WHEN document.expiration_date <= CURRENT_DATE + COALESCE(document.alert_days_before, 5) THEN 'expiring'\n           WHEN document.verification_status = 'review_required' THEN 'review_required'\n           ELSE 'missing_date'\n         END AS alert_type,\n         CASE\n           WHEN document.expiration_date < CURRENT_DATE THEN 'critical'\n           WHEN document.expiration_date <= CURRENT_DATE + 3 THEN 'critical'\n           WHEN document.expiration_date IS NOT NULL THEN 'warning'\n           ELSE 'info'\n         END AS severity,\n         CASE\n           WHEN document.expiration_date < CURRENT_DATE THEN 'Documento vencido: ' || document.document_name\n           WHEN document.expiration_date IS NOT NULL THEN 'Documento próximo a vencer: ' || document.document_name\n           WHEN document.verification_status = 'review_required' THEN 'Documento pendiente de revisión: ' || document.document_name\n           ELSE 'Fecha documental pendiente: ' || document.document_name\n         END AS title,\n         CASE\n           WHEN document.expiration_date < CURRENT_DATE THEN 'Venció el ' || TO_CHAR(document.expiration_date, 'DD/MM/YYYY') || '. Sustituye el archivo antes de usarlo en una propuesta.'\n           WHEN document.expiration_date IS NOT NULL THEN 'Vence el ' || TO_CHAR(document.expiration_date, 'DD/MM/YYYY') || '. Inicia su renovación con anticipación.'\n           WHEN document.verification_status = 'review_required' THEN 'Confirma el tipo, las fechas y los datos extraídos antes de utilizar este documento.'\n           ELSE 'No se encontró una fecha de expedición o vencimiento confiable. Completa la información manualmente.'\n         END AS message,\n         document.expiration_date AS due_date,\n         'document:' || document.id::TEXT || ':' || CASE\n           WHEN document.expiration_date < CURRENT_DATE THEN 'expired'\n           WHEN document.expiration_date <= CURRENT_DATE + COALESCE(document.alert_days_before, 5) THEN 'expiring'\n           WHEN document.verification_status = 'review_required' THEN 'review_required'\n           ELSE 'missing_date'\n         END AS dedupe_key,\n         jsonb_build_object('document_name', document.document_name, 'document_type', document.document_type,\n           'issue_date', document.issue_date, 'expiration_date', document.expiration_date,\n           'verification_status', document.verification_status, 'evaluated_at', NOW()) AS source_snapshot\n  FROM saas.organization_documents document\n  WHERE document.document_status <> 'deleted'\n    AND (NULLIF($1::TEXT, '') IS NULL OR document.organization_id = NULLIF($1::TEXT, '')::UUID)\n    AND (\n      document.expiration_date <= CURRENT_DATE + COALESCE(document.alert_days_before, 5)\n      OR document.verification_status = 'review_required'\n      OR (document.expiration_date IS NULL AND document.extraction_status NOT IN ('not_requested', 'processing'))\n    )\n), upserted AS (\n  INSERT INTO saas.document_alerts\n    (organization_id, organization_document_id, alert_type, severity, status, title, message,\n     due_date, dedupe_key, source_snapshot, first_triggered_at, last_triggered_at, updated_at)\n  SELECT organization_id, organization_document_id, alert_type, severity, 'open', title, message,\n         due_date, dedupe_key, source_snapshot, NOW(), NOW(), NOW()\n  FROM candidates\n  ON CONFLICT (organization_id, dedupe_key) DO UPDATE SET\n    severity = EXCLUDED.severity, status = CASE WHEN saas.document_alerts.status = 'dismissed' THEN 'dismissed' ELSE 'open' END,\n    title = EXCLUDED.title, message = EXCLUDED.message, due_date = EXCLUDED.due_date,\n    source_snapshot = EXCLUDED.source_snapshot, last_triggered_at = NOW(), resolved_at = NULL, updated_at = NOW()\n  RETURNING id\n), resolved AS (\n  UPDATE saas.document_alerts alert\n  SET status = 'resolved', resolved_at = NOW(), updated_at = NOW()\n  WHERE alert.status IN ('open', 'read')\n    AND (NULLIF($1::TEXT, '') IS NULL OR alert.organization_id = NULLIF($1::TEXT, '')::UUID)\n    AND NOT EXISTS (\n      SELECT 1 FROM candidates candidate\n      WHERE candidate.organization_id = alert.organization_id\n        AND candidate.organization_document_id = alert.organization_document_id\n        AND candidate.dedupe_key = alert.dedupe_key\n    )\n  RETURNING id\n), alert_sets AS (\n  SELECT organization.id AS organization_id, organization.name AS organization_name,\n         COALESCE(settings.daily_digest, TRUE) AS daily_digest,\n         COUNT(alert.id)::INTEGER AS open_alert_count,\n         COUNT(alert.id) FILTER (WHERE alert.severity = 'critical')::INTEGER AS critical_count,\n         COUNT(alert.id) FILTER (WHERE alert.severity = 'warning')::INTEGER AS warning_count,\n         COALESCE(jsonb_agg(jsonb_build_object(\n           'id', alert.id, 'title', alert.title, 'message', alert.message, 'severity', alert.severity,\n           'alert_type', alert.alert_type, 'due_date', alert.due_date,\n           'document_id', alert.organization_document_id\n         ) ORDER BY alert.severity, alert.due_date NULLS LAST) FILTER (WHERE alert.id IS NOT NULL), '[]'::JSONB) AS alerts\n  FROM saas.organizations organization\n  LEFT JOIN saas.app_organization_settings settings ON settings.organization_id = organization.id\n  LEFT JOIN saas.document_alerts alert ON alert.organization_id = organization.id AND alert.status IN ('open', 'read')\n  WHERE organization.status = 'active'\n    AND (NULLIF($1::TEXT, '') IS NULL OR organization.id = NULLIF($1::TEXT, '')::UUID)\n  GROUP BY organization.id, organization.name, settings.daily_digest\n)\nSELECT organization_id, organization_name, daily_digest, open_alert_count, critical_count, warning_count,\n       alerts, CURRENT_DATE AS digest_date, (SELECT COUNT(*) FROM upserted)::INTEGER AS alerts_refreshed,\n       (SELECT COUNT(*) FROM resolved)::INTEGER AS alerts_resolved\nFROM alert_sets\nWHERE open_alert_count > 0 AND daily_digest = TRUE;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.organization_id ?? '') ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -608,
+        32
+      ],
+      "id": "021000000-0000-4000-8000-000000000004",
+      "name": "Materializar alertas documentales WF-021",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const alerts = Array.isArray($json.alerts) ? $json.alerts.slice(0, 40) : [];\nconst snapshot = { organization_name: $json.organization_name, digest_date: $json.digest_date,\n  open_alert_count: Number($json.open_alert_count ?? 0), critical_count: Number($json.critical_count ?? 0),\n  warning_count: Number($json.warning_count ?? 0), alerts };\nconst aiPrompt = 'Genera un resumen ejecutivo breve de estas alertas documentales. Prioriza vencidos y próximos a vencer. ' +\n  'No inventes fechas, obligaciones ni documentos. Devuelve únicamente JSON con headline, summary_text y recommended_actions (arreglo de hasta 5 acciones). Datos: ' + JSON.stringify(snapshot);\nreturn [{ json: { ...$json, alert_snapshot: snapshot, ai_prompt: aiPrompt, model_name: 'models/gemini-3.1-flash-lite',\n  request_id: 'digest-' + $json.organization_id + '-' + $json.digest_date } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -368,
+        32
+      ],
+      "id": "021000000-0000-4000-8000-000000000005",
+      "name": "Preparar resumen diario WF-021"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "CernoIAProdWF020",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/CernoIAProdWF020",
+          "cachedResultName": "[CernoIA PROD] WF-020 — Control de cuota Gemini con Redis"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "provider": "google",
+            "model_name": "={{ $json.model_name ?? $json.ai_requirement_model ?? 'models/gemini-3.1-flash-lite' }}",
+            "workflow_code": "WF-021",
+            "organization_id": "={{ $json.organization_id ?? '' }}",
+            "request_id": "={{ $json.analysis_id ?? $json.opportunity_document_id ?? $json.organization_document_id ?? $json.proposal_package_id ?? 'WF-021-' + $execution.id }}",
+            "payload_json": "={{ JSON.stringify($json) }}",
+            "rpm_limit": "={{ Number($json.gemini_rpm_limit ?? 0) }}",
+            "rpd_limit": "={{ Number($json.gemini_rpd_limit ?? 0) }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "provider",
+              "displayName": "provider",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "model_name",
+              "displayName": "model_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "workflow_code",
+              "displayName": "workflow_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "organization_id",
+              "displayName": "organization_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "request_id",
+              "displayName": "request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "payload_json",
+              "displayName": "payload_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "rpm_limit",
+              "displayName": "rpm_limit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "rpd_limit",
+              "displayName": "rpd_limit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -128,
+        32
+      ],
+      "id": "021000000-0000-4000-8000-000000000006",
+      "name": "Reservar cuota Gemini WF-021",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "021000000-0000-4000-8000-000000001007",
+              "leftValue": "={{ $json.quota_granted === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        112,
+        32
+      ],
+      "id": "021000000-0000-4000-8000-000000000007",
+      "name": "¿Cuota para resumen WF-021?"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.1-flash-lite",
+        "options": {
+          "maxOutputTokens": 900,
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        320,
+        -176
+      ],
+      "id": "02100000-0000-4000-8000-000000000008",
+      "name": "Gemini alertas WF-021",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "ZfWqIHhxn1PfcxaP",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.ai_prompt }}",
+        "options": {
+          "systemMessage": "Eres un asistente de gestión documental. Resume riesgos sin emitir conceptos jurídicos, sin inventar información y usando únicamente los datos recibidos. Devuelve solo JSON válido.",
+          "maxIterations": 1,
+          "returnIntermediateSteps": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        352,
+        -48
+      ],
+      "id": "02100000-0000-4000-8000-000000000009",
+      "name": "Redactar alerta inteligente WF-021",
+      "retryOnFail": false,
+      "maxTries": 1,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Preparar resumen diario WF-021').item.json;\nconst raw = $json.output ?? $json.text ?? '';\nlet parsed = {};\ntry {\n  if (raw && typeof raw === 'object') parsed = raw;\n  else { const text = String(raw).replace(/^\\s*```(?:json)?/i, '').replace(/```\\s*$/i, '').trim(); parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)); }\n} catch {}\nconst actions = Array.isArray(parsed.recommended_actions) ? parsed.recommended_actions.map(String).filter(Boolean).slice(0, 5) : [];\nconst fallbackHeadline = Number(context.critical_count) > 0 ? 'Hay documentos que requieren atención inmediata' : 'Documentos próximos a gestión';\nreturn [{ json: { ...context, digest_status: Object.keys(parsed).length ? 'ready' : 'fallback',\n  headline: String(parsed.headline ?? fallbackHeadline).slice(0, 240),\n  summary_text: String(parsed.summary_text ?? ('Tienes ' + context.open_alert_count + ' alertas documentales abiertas. Revisa primero las de mayor severidad.')).slice(0, 2000),\n  recommended_actions: actions.length ? actions : ['Revisar los documentos vencidos o por vencer', 'Confirmar fechas extraídas automáticamente', 'Cargar las renovaciones disponibles'] } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        592,
+        -48
+      ],
+      "id": "021000000-0000-4000-8000-000000000010",
+      "name": "Normalizar resumen IA WF-021"
+    },
+    {
+      "parameters": {
+        "jsCode": "const critical = Number($json.critical_count ?? 0);\nreturn [{ json: { ...$json, digest_status: 'fallback',\n  headline: critical > 0 ? 'Hay documentos que requieren atención inmediata' : 'Documentos próximos a gestión',\n  summary_text: 'Tienes ' + Number($json.open_alert_count ?? 0) + ' alertas documentales abiertas. El resumen se generó sin IA porque la cuota diaria estaba agotada.',\n  recommended_actions: ['Revisar documentos vencidos', 'Confirmar fechas y vigencias', 'Cargar renovaciones disponibles'] } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        144
+      ],
+      "id": "021000000-0000-4000-8000-000000000011",
+      "name": "Crear resumen sin IA WF-021"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO saas.alert_digests\n  (organization_id, digest_date, status, headline, summary_text, recommended_actions,\n   source_snapshot, model_provider, model_name, generated_at, updated_at)\nVALUES ($1::UUID, $2::DATE, $3, $4, $5, $6::JSONB, $7::JSONB, 'google', $8, NOW(), NOW())\nON CONFLICT (organization_id, digest_date) DO UPDATE SET\n  status = EXCLUDED.status, headline = EXCLUDED.headline, summary_text = EXCLUDED.summary_text,\n  recommended_actions = EXCLUDED.recommended_actions, source_snapshot = EXCLUDED.source_snapshot,\n  model_provider = EXCLUDED.model_provider, model_name = EXCLUDED.model_name,\n  generated_at = NOW(), updated_at = NOW()\nRETURNING id, organization_id, digest_date, status, headline, summary_text,\n          recommended_actions, generated_at;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.organization_id), String($json.digest_date), String($json.digest_status ?? 'fallback'), String($json.headline), String($json.summary_text), JSON.stringify($json.recommended_actions ?? []), JSON.stringify($json.alert_snapshot ?? {}), String($json.model_name ?? 'models/gemini-3.1-flash-lite') ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        832,
+        32
+      ],
+      "id": "021000000-0000-4000-8000-000000000012",
+      "name": "Guardar resumen de alertas WF-021",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({ json: { ...item.json, workflow_code: 'WF-021', workflow_status: 'success', completion_reason: item.json.organization_id ? 'digest_generated' : 'no_alerts', finished_at: new Date().toISOString() } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        32
+      ],
+      "id": "021000000-0000-4000-8000-000000000013",
+      "name": "Finalizar alertas WF-021"
+    },
+    {
+      "id": "a2aa7fd7-4e8a-4331-94b7-078c9b66e177",
+      "name": "¿Hay alertas para resumir WF-021?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        300,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ee8da0c1-00ab-4bee-9524-902aab5abf1c",
+              "leftValue": "={{ Boolean($json.organization_id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Cada día 07:00 Bogotá WF-021": {
+      "main": [
+        [
+          {
+            "node": "Materializar alertas documentales WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada desde otro workflow WF-021": {
+      "main": [
+        [
+          {
+            "node": "Materializar alertas documentales WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inicio Manual WF-021": {
+      "main": [
+        [
+          {
+            "node": "Materializar alertas documentales WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Materializar alertas documentales WF-021": {
+      "main": [
+        [
+          {
+            "node": "¿Hay alertas para resumir WF-021?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar resumen diario WF-021": {
+      "main": [
+        [
+          {
+            "node": "Reservar cuota Gemini WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reservar cuota Gemini WF-021": {
+      "main": [
+        [
+          {
+            "node": "¿Cuota para resumen WF-021?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Cuota para resumen WF-021?": {
+      "main": [
+        [
+          {
+            "node": "Redactar alerta inteligente WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Crear resumen sin IA WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini alertas WF-021": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Redactar alerta inteligente WF-021",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redactar alerta inteligente WF-021": {
+      "main": [
+        [
+          {
+            "node": "Normalizar resumen IA WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalizar resumen IA WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar resumen IA WF-021": {
+      "main": [
+        [
+          {
+            "node": "Guardar resumen de alertas WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear resumen sin IA WF-021": {
+      "main": [
+        [
+          {
+            "node": "Guardar resumen de alertas WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar resumen de alertas WF-021": {
+      "main": [
+        [
+          {
+            "node": "Finalizar alertas WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay alertas para resumir WF-021?": {
+      "main": [
+        [
+          {
+            "node": "Preparar resumen diario WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalizar alertas WF-021",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Bogota",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "CernoIAProdWF007",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

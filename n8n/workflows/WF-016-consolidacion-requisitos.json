@@ -1,0 +1,271 @@
+{
+  "id": "CernoIAProdWF016",
+  "name": "[CernoIA PROD] WF-016 — Consolidación de requisitos por oportunidad",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -640,
+        0
+      ],
+      "id": "16000000-0000-4000-8000-000000000001",
+      "name": "Inicio Manual WF-016"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "requested_by_user_id"
+            },
+            {
+              "name": "process_id"
+            },
+            {
+              "name": "processing_mode"
+            },
+            {
+              "name": "orchestration_execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -640,
+        -176
+      ],
+      "id": "16000000-0000-4000-8000-000000000002",
+      "name": "Entrada desde WF-019"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first()?.json ?? {}; return [{ json: { ...input, organization_id: input.organization_id ?? '', process_id: input.process_id ?? '', max_opportunities: Math.min(25, Math.max(1, Number(input.max_opportunities ?? 10))), n8n_execution_id: String($execution.id ?? '') } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        -80
+      ],
+      "id": "16000000-0000-4000-8000-000000000003",
+      "name": "Configurar procesamiento WF-016"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH grouped AS (\n  SELECT r.organization_id, r.opportunity_analysis_id, r.process_id, MAX(p.reference) AS process_reference,\n         COUNT(DISTINCT r.opportunity_document_id)::INTEGER AS source_document_count, COUNT(*)::INTEGER AS source_requirement_count,\n         ENCODE(DIGEST(CONVERT_TO(STRING_AGG(CONCAT_WS('|', r.id::TEXT, r.requirement_hash_sha256::TEXT, r.updated_at::TEXT), '|' ORDER BY r.id), 'UTF8'), 'sha256'), 'hex') AS input_hash_sha256\n  FROM saas.opportunity_requirements r JOIN secop.processes p ON p.id = r.process_id\n  WHERE r.status IN ('active', 'review_required')\n    AND (NULLIF($1::TEXT, '') IS NULL OR r.organization_id = NULLIF($1::TEXT, '')::UUID)\n    AND (NULLIF($2::TEXT, '') IS NULL OR r.process_id = NULLIF($2::TEXT, '')::UUID)\n  GROUP BY r.organization_id, r.opportunity_analysis_id, r.process_id\n), pending AS (\n  SELECT g.* FROM grouped g\n  WHERE NOT EXISTS (SELECT 1 FROM saas.opportunity_requirement_matrices m\n    WHERE m.organization_id = g.organization_id AND m.opportunity_analysis_id = g.opportunity_analysis_id\n      AND m.input_hash_sha256 = g.input_hash_sha256::CHAR(64) AND m.consolidation_version = 1 AND m.matrix_status = 'completed')\n  ORDER BY g.source_requirement_count DESC, g.opportunity_analysis_id LIMIT GREATEST(1, LEAST($3::INTEGER, 25))\n) SELECT * FROM pending;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.organization_id ?? ''), String($json.process_id ?? ''), Number($json.max_opportunities ?? 10) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -160,
+        -80
+      ],
+      "id": "16000000-0000-4000-8000-000000000004",
+      "name": "Tomar oportunidades pendientes WF-016",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "16000000-0000-4000-8000-000000000005",
+              "leftValue": "={{ Boolean($json.opportunity_analysis_id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        80,
+        -80
+      ],
+      "id": "16000000-0000-4000-8000-000000000006",
+      "name": "¿Hay oportunidades para consolidar?"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        320,
+        -160
+      ],
+      "id": "16000000-0000-4000-8000-000000000007",
+      "name": "Consolidar una a una WF-016"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM saas.consolidate_opportunity_requirement_matrix_v1(\n  $1::UUID, $2::UUID, $3::UUID, $4::TEXT, $5::TEXT, $6::INTEGER, $7::INTEGER, 1, 'deterministic_v1', $8::TEXT\n);",
+        "options": {
+          "queryReplacement": "={{ [ String($json.organization_id), String($json.opportunity_analysis_id), String($json.process_id), String($json.process_reference ?? ''), String($json.input_hash_sha256), Number($json.source_document_count ?? 0), Number($json.source_requirement_count ?? 0), String($execution.id ?? '') ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        560,
+        -64
+      ],
+      "id": "16000000-0000-4000-8000-000000000008",
+      "name": "Consolidar matriz WF-016",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('Configurar procesamiento WF-016').first().json; return [{ json: { ...config, workflow_code: 'WF-016', workflow_status: 'success', completion_reason: 'queue_drained', finished_at: new Date().toISOString() } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        -272
+      ],
+      "id": "16000000-0000-4000-8000-000000000009",
+      "name": "Finalizar WF-016"
+    }
+  ],
+  "connections": {
+    "Inicio Manual WF-016": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-016",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada desde WF-019": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-016",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configurar procesamiento WF-016": {
+      "main": [
+        [
+          {
+            "node": "Tomar oportunidades pendientes WF-016",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tomar oportunidades pendientes WF-016": {
+      "main": [
+        [
+          {
+            "node": "¿Hay oportunidades para consolidar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay oportunidades para consolidar?": {
+      "main": [
+        [
+          {
+            "node": "Consolidar una a una WF-016",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalizar WF-016",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar una a una WF-016": {
+      "main": [
+        [
+          {
+            "node": "Finalizar WF-016",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Consolidar matriz WF-016",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar matriz WF-016": {
+      "main": [
+        [
+          {
+            "node": "Consolidar una a una WF-016",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Bogota",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "CernoIAProdWF007",
+    "executionTimeout": 1800,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

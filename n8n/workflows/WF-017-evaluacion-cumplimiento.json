@@ -1,0 +1,664 @@
+{
+  "id": "CernoIAProdWF017",
+  "name": "[CernoIA PROD] WF-017 — Evaluación de cumplimiento empresarial",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -64
+      ],
+      "id": "f6e5ffab-840e-4d51-a4cd-7361d80a821d",
+      "name": "Inicio Manual WF-017"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first()?.json ?? {};\nconst input = raw.body && typeof raw.body === 'object' ? raw.body : raw;\n\nreturn [{\n  json: {\n    ...input,\n  workflow_code: input.workflow_code ?? 'WF-017',\n  source_code: input.source_code ?? 'SECOP_OPPORTUNITY_COMPLIANCE_EVALUATION',\n  processing_mode: input.processing_mode ?? 'all',\n  max_matrices: input.max_matrices ?? 10,\n  evaluation_version: input.evaluation_version ?? 3,\n  evaluation_method: input.evaluation_method ?? 'deterministic_v3',\n  lock_minutes: input.lock_minutes ?? 30,\n  stale_lock_minutes: input.stale_lock_minutes ?? 45,\n    n8n_execution_id: String($execution.id ?? ''),\n    trigger_type: String($execution.mode ?? 'manual'),\n    configured_at: new Date().toISOString(),\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "b99c3faa-a9f7-49d2-8a8e-f3771e039d45",
+      "name": "Configurar procesamiento WF-017"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.sync_cursors\n(\n    source_code,\n    status,\n    active_execution_id,\n    lock_acquired_at,\n    lock_expires_at,\n    error_message,\n    metadata,\n    updated_at\n)\n\nVALUES\n(\n    $1::TEXT,\n\n    'idle',\n\n    NULL,\n    NULL,\n    NULL,\n    NULL,\n\n    jsonb_build_object(\n        'workflow_code',\n        'WF-017',\n\n        'source_code',\n        $1::TEXT,\n\n        'initialized_by',\n        'WF-017',\n\n        'initialized_at',\n        NOW()\n    ),\n\n    NOW()\n)\n\nON CONFLICT\n(\n    source_code\n)\n\nDO UPDATE\n\nSET\n    metadata =\n        COALESCE(\n            ops.sync_cursors.metadata,\n            '{}'::JSONB\n        )\n        ||\n        jsonb_build_object(\n            'workflow_code',\n            'WF-017',\n\n            'last_initialized_at',\n            NOW(),\n\n            'last_initialized_by',\n            'WF-017'\n        ),\n\n    updated_at =\n        NOW()\n\nRETURNING\n    source_code,\n    status,\n    active_execution_id,\n    lock_acquired_at,\n    lock_expires_at,\n    error_message,\n    metadata,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-017\")\n      .first()\n      .json\n      .source_code\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        416,
+        0
+      ],
+      "id": "77bb4165-c934-4ede-aa31-1a7f58bc8e08",
+      "name": "Inicializar cursor WF-017",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH configuration AS (\n    SELECT\n        $1::TEXT\n            AS source_code,\n\n        $2::INTEGER\n            AS stale_lock_minutes\n),\n\nstale_cursor AS (\n    SELECT\n        cursor.source_code,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n        cursor.status\n\n    FROM ops.sync_cursors\n        AS cursor\n\n    CROSS JOIN configuration\n        AS config\n\n    WHERE cursor.source_code =\n          config.source_code\n\n      AND cursor.active_execution_id\n          IS NOT NULL\n\n      AND (\n          cursor.lock_expires_at\n              IS NULL\n\n          OR\n\n          cursor.lock_expires_at <\n              NOW()\n\n          OR\n\n          cursor.lock_acquired_at <\n              NOW()\n              -\n              (\n                  config.stale_lock_minutes\n                  * INTERVAL '1 minute'\n              )\n      )\n\n    FOR UPDATE\n),\n\nclosed_stale_runs AS (\n    UPDATE ops.workflow_runs\n        AS run\n\n    SET\n        status =\n            'failed',\n\n        finished_at =\n            NOW(),\n\n        completion_reason =\n            'stale_lock_recovery',\n\n        error_message =\n            COALESCE(\n                run.error_message,\n                'La ejecución fue cerrada automáticamente por recuperación de bloqueo vencido.'\n            ),\n\n        error_details =\n            COALESCE(\n                run.error_details,\n                '{}'::JSONB\n            )\n            ||\n            jsonb_build_object(\n                'recovered_by',\n                'WF-017',\n\n                'recovery_reason',\n                'stale_lock',\n\n                'recovered_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM stale_cursor\n        AS stale\n\n    WHERE run.workflow_code =\n          'WF-017'\n\n      AND run.n8n_execution_id =\n          stale.active_execution_id::TEXT\n\n      AND run.status =\n          'running'\n\n    RETURNING run.id\n),\n\nreleased_cursor AS (\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'error',\n\n        active_execution_id =\n            NULL,\n\n        lock_acquired_at =\n            NULL,\n\n        lock_expires_at =\n            NULL,\n\n        error_message =\n            'Bloqueo vencido recuperado automáticamente por WF-017.',\n\n        metadata =\n            (\n                COALESCE(\n                    cursor.metadata,\n                    '{}'::JSONB\n                )\n                -\n                'active_workflow'\n                -\n                'active_execution_id'\n                -\n                'active_execution_started_at'\n            )\n            ||\n            jsonb_build_object(\n                'stale_lock_recovered',\n                TRUE,\n\n                'stale_lock_recovered_at',\n                NOW(),\n\n                'stale_lock_recovered_by',\n                'WF-017'\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM stale_cursor\n        AS stale\n\n    WHERE cursor.source_code =\n          stale.source_code\n\n    RETURNING\n        cursor.source_code\n)\n\nSELECT\n    EXISTS(\n        SELECT 1\n        FROM stale_cursor\n    )\n        AS stale_lock_found,\n\n    EXISTS(\n        SELECT 1\n        FROM released_cursor\n    )\n        AS stale_lock_released,\n\n    (\n        SELECT COUNT(*)::INTEGER\n        FROM closed_stale_runs\n    )\n        AS stale_runs_closed,\n\n    cursor.source_code,\n    cursor.status\n        AS cursor_status,\n\n    cursor.active_execution_id,\n    cursor.lock_acquired_at,\n    cursor.lock_expires_at,\n    cursor.error_message,\n    cursor.updated_at\n\nFROM ops.sync_cursors\n    AS cursor\n\nWHERE cursor.source_code =\n      $1::TEXT;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-017\")\n      .first()\n      .json\n      .source_code\n  ),\n\n  Number(\n    $(\"Configurar procesamiento WF-017\")\n      .first()\n      .json\n      .stale_lock_minutes\n      ?? 45\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        624,
+        0
+      ],
+      "id": "fd570dbb-28f7-43f7-9e9b-7cd568d230a3",
+      "name": "Recuperar bloqueo vencido WF-017",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH lock_attempt AS (\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'running',\n\n        active_execution_id =\n            $2::TEXT,\n\n        lock_acquired_at =\n            NOW(),\n\n        lock_expires_at =\n            NOW()\n            +\n            (\n                $3::INTEGER\n                * INTERVAL '1 minute'\n            ),\n\n        error_message =\n            NULL,\n\n        metadata =\n            COALESCE(\n                cursor.metadata,\n                '{}'::JSONB\n            )\n            ||\n            jsonb_build_object(\n                'active_workflow',\n                'WF-017',\n\n                'active_execution_id',\n                $2::TEXT,\n\n                'active_execution_started_at',\n                NOW(),\n\n                'evaluation_version',\n                3,\n\n                'evaluation_method',\n                'deterministic_v3'\n            ),\n\n        updated_at =\n            NOW()\n\n    WHERE cursor.source_code =\n          $1::TEXT\n\n      AND (\n          cursor.active_execution_id\n              IS NULL\n\n          OR\n\n          cursor.lock_expires_at\n              IS NULL\n\n          OR\n\n          cursor.lock_expires_at <\n              NOW()\n\n          OR\n\n          cursor.active_execution_id::TEXT =\n              $2::TEXT\n      )\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n        cursor.error_message,\n        cursor.updated_at\n)\n\nSELECT\n    TRUE\n        AS lock_acquired,\n\n    acquired.source_code,\n    acquired.status\n        AS cursor_status,\n\n    acquired.active_execution_id,\n    acquired.lock_acquired_at,\n    acquired.lock_expires_at,\n    acquired.error_message,\n    acquired.updated_at\n\nFROM lock_attempt\n    AS acquired\n\nUNION ALL\n\nSELECT\n    FALSE\n        AS lock_acquired,\n\n    cursor.source_code,\n    cursor.status\n        AS cursor_status,\n\n    cursor.active_execution_id,\n    cursor.lock_acquired_at,\n    cursor.lock_expires_at,\n    cursor.error_message,\n    cursor.updated_at\n\nFROM ops.sync_cursors\n    AS cursor\n\nWHERE cursor.source_code =\n      $1::TEXT\n\n  AND NOT EXISTS (\n      SELECT 1\n      FROM lock_attempt\n  )\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-017\")\n      .first()\n      .json\n      .source_code\n  ),\n\n  String(\n    $execution.id ?? \"\"\n  ),\n\n  Number(\n    $(\"Configurar procesamiento WF-017\")\n      .first()\n      .json\n      .lock_minutes\n      ?? 30\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        832,
+        0
+      ],
+      "id": "1dbb4761-bc81-4399-82fa-b5e4d881f893",
+      "name": "Adquirir bloqueo WF-017",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input =\n  $input.first()?.json ?? {};\n\nconst rawLockValue =\n  input.lock_acquired;\n\nconst lockAcquired =\n  rawLockValue === true\n  || rawLockValue === 1\n  || String(\n    rawLockValue ?? ''\n  )\n    .trim()\n    .toLowerCase() === 'true'\n  || String(\n    rawLockValue ?? ''\n  )\n    .trim() === '1';\n\nreturn [\n  {\n    json: {\n      ...input,\n\n      lock_acquired_raw:\n        rawLockValue ?? null,\n\n      lock_acquired_boolean:\n        lockAcquired,\n\n      lock_acquired_flag:\n        lockAcquired\n          ? 1\n          : 0,\n\n      lock_route:\n        lockAcquired\n          ? 'LOCK_ACQUIRED'\n          : 'LOCK_NOT_ACQUIRED',\n\n      workflow_code:\n        'WF-017',\n\n      normalized_at:\n        new Date().toISOString(),\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ],
+      "id": "488b171e-37d9-41e2-9a7e-26d500c0915f",
+      "name": "Normalizar resultado de bloqueo WF-017"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4f9e5f31-0918-4f3c-92cf-272410020afc",
+              "leftValue": "={{ $json.lock_acquired_boolean }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        0,
+        -256
+      ],
+      "id": "17df705d-780f-49aa-a844-25f8ced5beb1",
+      "name": "¿Bloqueo adquirido WF-017?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs\n(\n    workflow_code,\n    n8n_execution_id,\n    status,\n    started_at,\n    error_details,\n    created_at,\n    updated_at\n)\n\nVALUES\n(\n    'WF-017',\n\n    $1::TEXT,\n\n    'running',\n\n    NOW(),\n\n    jsonb_build_object(\n        'workflow_code',\n        'WF-017',\n\n        'source_code',\n        'SECOP_OPPORTUNITY_COMPLIANCE_EVALUATION',\n\n        'evaluation_version',\n        3,\n\n        'evaluation_method',\n        'deterministic_v3',\n\n        'trigger_type',\n        $2::TEXT,\n\n        'started_by',\n        'WF-017',\n\n        'started_at',\n        NOW()\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT DO NOTHING\n\nRETURNING\n    id AS workflow_run_id,\n\n    workflow_code,\n\n    n8n_execution_id,\n\n    status AS workflow_run_status,\n\n    started_at,\n\n    created_at,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String($execution.id ?? \"\"),\n\n  String(\n    $(\"Configurar procesamiento WF-017\")\n      .first()\n      .json\n      .trigger_type\n      ?? \"manual\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        208,
+        -352
+      ],
+      "id": "f60e6848-b015-4442-8b8e-2cf0f5c16ab0",
+      "name": "Registrar inicio WF-017",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH configuration AS (\n    SELECT\n        $1::INTEGER\n            AS max_matrices\n),\n\ncurrent_matrices AS (\n    SELECT\n        matrix.id\n            AS matrix_id,\n\n        matrix.organization_id,\n\n        matrix.opportunity_analysis_id,\n\n        matrix.process_id,\n\n        matrix.process_reference,\n\n        matrix.input_hash_sha256\n            AS matrix_input_hash,\n\n        matrix.finished_at\n            AS matrix_finished_at,\n\n        matrix.updated_at\n            AS matrix_updated_at\n\n    FROM saas.opportunity_requirement_matrices\n        AS matrix\n\n    WHERE matrix.is_current = TRUE\n\n      AND matrix.matrix_status =\n          'completed'\n),\n\ndocument_state AS (\n    SELECT\n        matrix.matrix_id,\n\n        ENCODE(\n            DIGEST(\n                CONVERT_TO(\n                    COALESCE(\n                        STRING_AGG(\n                            CONCAT_WS(\n                                ':',\n\n                                document.id::TEXT,\n\n                                document.document_type,\n\n                                COALESCE(\n                                    document.issue_date::TEXT,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.expiration_date::TEXT,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.renewal_due_date::TEXT,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.alert_due_date::TEXT,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.renewal_status,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.verification_status,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.updated_at::TEXT,\n                                    ''\n                                )\n                            ),\n\n                            '|'\n\n                            ORDER BY\n                                document.id\n                        ),\n                        ''\n                    ),\n\n                    'UTF8'\n                ),\n\n                'sha256'\n            ),\n\n            'hex'\n        )\n            AS current_document_hash\n\n    FROM current_matrices\n        AS matrix\n\n    LEFT JOIN saas.organization_documents\n        AS document\n\n        ON document.organization_id =\n           matrix.organization_id\n\n       AND document.document_status IN (\n           'uploaded',\n           'active'\n       )\n\n       AND document.replaced_by_document_id\n           IS NULL\n\n    GROUP BY\n        matrix.matrix_id\n),\n\nevaluation_state AS (\n    SELECT\n        matrix.matrix_id,\n        matrix.organization_id,\n        matrix.opportunity_analysis_id,\n        matrix.process_id,\n        matrix.process_reference,\n        matrix.matrix_input_hash,\n        matrix.matrix_finished_at,\n        matrix.matrix_updated_at,\n\n        documents.current_document_hash,\n\n        evaluation.id\n            AS current_evaluation_id,\n\n        evaluation.input_hash_sha256\n            AS stored_evaluation_hash,\n\n        evaluation.evaluation_version,\n\n        evaluation.evaluation_method,\n\n        evaluation.evaluation_status,\n\n        evaluation.overall_status,\n\n        evaluation.updated_at\n            AS evaluation_updated_at,\n\n        COALESCE(\n            evaluation.metadata\n                ->> 'matrix_input_hash',\n            ''\n        )\n            AS evaluated_matrix_hash,\n\n        COALESCE(\n            evaluation.metadata\n                ->> 'document_state_hash',\n            ''\n        )\n            AS evaluated_document_hash\n\n    FROM current_matrices\n        AS matrix\n\n    JOIN document_state\n        AS documents\n\n        ON documents.matrix_id =\n           matrix.matrix_id\n\n    LEFT JOIN LATERAL (\n        SELECT\n            current_evaluation.*\n\n        FROM saas.opportunity_compliance_evaluations\n            AS current_evaluation\n\n        WHERE current_evaluation.matrix_id =\n              matrix.matrix_id\n\n          AND current_evaluation.is_current =\n              TRUE\n\n        ORDER BY\n            current_evaluation.updated_at DESC,\n            current_evaluation.created_at DESC\n\n        LIMIT 1\n    )\n        AS evaluation\n\n        ON TRUE\n),\n\npending_matrices AS (\n    SELECT\n        state.*,\n\n        CASE\n\n            WHEN state.current_evaluation_id\n                 IS NULL\n                THEN\n                    'NO_EVALUATION'\n\n            WHEN state.evaluation_status <>\n                 'completed'\n                THEN\n                    'EVALUATION_NOT_COMPLETED'\n\n            WHEN state.evaluation_version\n                 IS DISTINCT FROM 3\n                THEN\n                    'VERSION_CHANGED'\n\n            WHEN state.evaluation_method\n                 IS DISTINCT FROM\n                 'deterministic_v3'\n                THEN\n                    'METHOD_CHANGED'\n\n            WHEN state.evaluated_matrix_hash\n                 IS DISTINCT FROM\n                 state.matrix_input_hash::TEXT\n                THEN\n                    'MATRIX_CHANGED'\n\n            WHEN state.evaluated_document_hash\n                 IS DISTINCT FROM\n                 state.current_document_hash\n                THEN\n                    'DOCUMENTS_CHANGED'\n\n            ELSE\n                NULL\n\n        END\n            AS claim_reason\n\n    FROM evaluation_state\n        AS state\n),\n\nselected_matrices AS (\n    SELECT\n        pending.*\n\n    FROM pending_matrices\n        AS pending\n\n    WHERE pending.claim_reason\n          IS NOT NULL\n\n    ORDER BY\n\n        CASE pending.claim_reason\n            WHEN 'NO_EVALUATION'\n                THEN 1\n\n            WHEN 'EVALUATION_NOT_COMPLETED'\n                THEN 2\n\n            WHEN 'VERSION_CHANGED'\n                THEN 3\n\n            WHEN 'METHOD_CHANGED'\n                THEN 4\n\n            WHEN 'MATRIX_CHANGED'\n                THEN 5\n\n            WHEN 'DOCUMENTS_CHANGED'\n                THEN 6\n\n            ELSE 10\n        END,\n\n        pending.matrix_finished_at DESC\n            NULLS LAST,\n\n        pending.matrix_id\n\n    LIMIT (\n        SELECT\n            GREATEST(\n                1,\n\n                LEAST(\n                    configuration.max_matrices,\n                    100\n                )\n            )\n\n        FROM configuration\n    )\n)\n\nSELECT\n    TRUE\n        AS has_matrix,\n\n    selected.claim_reason,\n\n    selected.matrix_id,\n\n    selected.organization_id,\n\n    selected.opportunity_analysis_id,\n\n    selected.process_id,\n\n    selected.process_reference,\n\n    selected.matrix_input_hash,\n\n    selected.current_document_hash,\n\n    selected.current_evaluation_id,\n\n    selected.evaluation_version\n        AS previous_evaluation_version,\n\n    selected.evaluation_method\n        AS previous_evaluation_method,\n\n    selected.evaluation_status\n        AS previous_evaluation_status,\n\n    selected.overall_status\n        AS previous_overall_status,\n\n    selected.stored_evaluation_hash,\n\n    selected.evaluated_matrix_hash,\n\n    selected.evaluated_document_hash,\n\n    selected.matrix_finished_at,\n\n    selected.matrix_updated_at,\n\n    selected.evaluation_updated_at\n\nFROM selected_matrices\n    AS selected\n\nUNION ALL\n\nSELECT\n    FALSE\n        AS has_matrix,\n\n    'NO_MATRICES'::TEXT\n        AS claim_reason,\n\n    NULL::UUID\n        AS matrix_id,\n\n    NULL::UUID\n        AS organization_id,\n\n    NULL::UUID\n        AS opportunity_analysis_id,\n\n    NULL::UUID\n        AS process_id,\n\n    NULL::TEXT\n        AS process_reference,\n\n    NULL::TEXT\n        AS matrix_input_hash,\n\n    NULL::TEXT\n        AS current_document_hash,\n\n    NULL::UUID\n        AS current_evaluation_id,\n\n    NULL::INTEGER\n        AS previous_evaluation_version,\n\n    NULL::TEXT\n        AS previous_evaluation_method,\n\n    NULL::TEXT\n        AS previous_evaluation_status,\n\n    NULL::TEXT\n        AS previous_overall_status,\n\n    NULL::TEXT\n        AS stored_evaluation_hash,\n\n    NULL::TEXT\n        AS evaluated_matrix_hash,\n\n    NULL::TEXT\n        AS evaluated_document_hash,\n\n    NULL::TIMESTAMPTZ\n        AS matrix_finished_at,\n\n    NULL::TIMESTAMPTZ\n        AS matrix_updated_at,\n\n    NULL::TIMESTAMPTZ\n        AS evaluation_updated_at\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM selected_matrices\n)\n\nORDER BY\n    has_matrix DESC,\n    process_reference;",
+        "options": {
+          "queryReplacement": "={{\n[\n  Number(\n    $(\"Configurar procesamiento WF-017\")\n      .first()\n      .json\n      .max_matrices\n      ?? 10\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        624,
+        -352
+      ],
+      "id": "79e0c2ec-c098-474c-91d6-00abbb1336eb",
+      "name": "Tomar matrices pendientes WF-017",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst uuidPattern =\n  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\n\nreturn items.map((item) => {\n  const input =\n    item.json ?? {};\n\n  const rawHasMatrix =\n    input.has_matrix;\n\n  const rawBoolean =\n    rawHasMatrix === true\n    || rawHasMatrix === 1\n    || String(rawHasMatrix ?? '')\n      .trim()\n      .toLowerCase() === 'true'\n    || String(rawHasMatrix ?? '')\n      .trim() === '1';\n\n  const matrixId =\n    String(\n      input.matrix_id ?? ''\n    ).trim();\n\n  const hasValidMatrixId =\n    uuidPattern.test(matrixId);\n\n  const hasMatrix =\n    rawBoolean\n    && hasValidMatrixId;\n\n  return {\n    json: {\n      ...input,\n\n      has_matrix_raw:\n        rawHasMatrix ?? null,\n\n      has_matrix_boolean:\n        hasMatrix,\n\n      has_matrix_flag:\n        hasMatrix\n          ? 1\n          : 0,\n\n      has_valid_matrix_id:\n        hasValidMatrixId,\n\n      normalized_matrix_id:\n        hasValidMatrixId\n          ? matrixId\n          : null,\n\n      matrix_route:\n        hasMatrix\n          ? 'MATRIX_AVAILABLE'\n          : 'NO_MATRICES',\n\n      workflow_code:\n        'WF-017',\n\n      normalized_at:\n        new Date().toISOString(),\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        -352
+      ],
+      "id": "93cd6a26-2e2a-47d2-8445-5212346f0383",
+      "name": "Normalizar resultado de matrices WF-017"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "9c379b85-3db4-4691-8849-ad3787511753",
+              "leftValue": "={{ $json.has_matrix_flag }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1040,
+        -352
+      ],
+      "id": "bc3987b8-d827-4205-8ac7-dffaa7a93f77",
+      "name": "¿Hay matrices para evaluar WF-017?"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1248,
+        -464
+      ],
+      "id": "b1a69ac9-5f8d-41bf-9c59-1c01190f4491",
+      "name": "Procesar matrices una a una WF-017"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS (\n    SELECT\n        NULLIF(\n            BTRIM(\n                $1::TEXT\n            ),\n            ''\n        )\n            AS raw_matrix_id,\n\n        NULLIF(\n            BTRIM(\n                $2::TEXT\n            ),\n            ''\n        )\n            AS n8n_execution_id\n),\n\nvalidated_parameters AS (\n    SELECT\n        CASE\n            WHEN parameters.raw_matrix_id\n                 ~*\n                 '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'\n\n                THEN parameters.raw_matrix_id::UUID\n\n            ELSE NULL::UUID\n        END\n            AS matrix_id,\n\n        parameters.n8n_execution_id\n\n    FROM parameters\n),\n\nevaluation_result AS (\n    SELECT\n        result.*\n\n    FROM validated_parameters\n        AS parameters\n\n    CROSS JOIN LATERAL\n        saas.evaluate_opportunity_compliance_v3\n        (\n            parameters.matrix_id,\n            parameters.n8n_execution_id\n        )\n            AS result\n\n    WHERE parameters.matrix_id\n          IS NOT NULL\n)\n\nSELECT\n    TRUE\n        AS has_evaluation,\n\n    result.evaluation_id,\n    result.matrix_id,\n    result.organization_id,\n    result.opportunity_analysis_id,\n    result.process_reference,\n    result.evaluation_status,\n    result.overall_status,\n    result.compliance_score,\n    result.total_requirement_count,\n    result.bid_requirement_count,\n    result.compliant_count,\n    result.expiring_count,\n    result.expired_count,\n    result.missing_count,\n    result.non_compliant_count,\n    result.manual_review_count,\n    result.not_applicable_count,\n    result.verification_pending_count,\n    result.mandatory_bid_blocker_count,\n    result.mandatory_bid_review_count,\n    result.warning_count,\n    result.base_result_code,\n    result.result_code,\n    result.evaluation_version,\n    result.evaluation_method,\n    result.changes_applied,\n    result.evaluated_at\n\nFROM evaluation_result\n    AS result\n\n\nUNION ALL\n\n\nSELECT\n    FALSE\n        AS has_evaluation,\n\n    NULL::UUID\n        AS evaluation_id,\n\n    NULL::UUID\n        AS matrix_id,\n\n    NULL::UUID\n        AS organization_id,\n\n    NULL::UUID\n        AS opportunity_analysis_id,\n\n    NULL::TEXT\n        AS process_reference,\n\n    'skipped'::TEXT\n        AS evaluation_status,\n\n    NULL::TEXT\n        AS overall_status,\n\n    NULL::NUMERIC\n        AS compliance_score,\n\n    0::INTEGER\n        AS total_requirement_count,\n\n    0::INTEGER\n        AS bid_requirement_count,\n\n    0::INTEGER\n        AS compliant_count,\n\n    0::INTEGER\n        AS expiring_count,\n\n    0::INTEGER\n        AS expired_count,\n\n    0::INTEGER\n        AS missing_count,\n\n    0::INTEGER\n        AS non_compliant_count,\n\n    0::INTEGER\n        AS manual_review_count,\n\n    0::INTEGER\n        AS not_applicable_count,\n\n    0::INTEGER\n        AS verification_pending_count,\n\n    0::INTEGER\n        AS mandatory_bid_blocker_count,\n\n    0::INTEGER\n        AS mandatory_bid_review_count,\n\n    0::INTEGER\n        AS warning_count,\n\n    'matrix_not_available'::TEXT\n        AS base_result_code,\n\n    'skipped_invalid_matrix_id'::TEXT\n        AS result_code,\n\n    3::INTEGER\n        AS evaluation_version,\n\n    'deterministic_v3'::TEXT\n        AS evaluation_method,\n\n    FALSE\n        AS changes_applied,\n\n    NOW()\n        AS evaluated_at\n\nFROM validated_parameters\n    AS parameters\n\nWHERE parameters.matrix_id\n      IS NULL;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $json.matrix_id ?? \"\"\n  ),\n\n  String(\n    $execution.id ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1456,
+        -336
+      ],
+      "id": "1d7c786a-cf08-404c-b8fd-b65cc3484b1c",
+      "name": "Evaluar cumplimiento V3 WF-017",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS (\n    SELECT\n        NULLIF(\n            BTRIM(\n                $1::TEXT\n            ),\n            ''\n        )\n            AS raw_matrix_id,\n\n        NULLIF(\n            BTRIM(\n                $2::TEXT\n            ),\n            ''\n        )\n            AS raw_evaluation_id,\n\n        NULLIF(\n            BTRIM(\n                $3::TEXT\n            ),\n            ''\n        )\n            AS execution_id\n),\n\nvalidated_parameters AS (\n    SELECT\n        CASE\n            WHEN parameters.raw_matrix_id\n                 ~*\n                 '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'\n                THEN parameters.raw_matrix_id::UUID\n\n            ELSE NULL::UUID\n        END\n            AS matrix_id,\n\n        CASE\n            WHEN parameters.raw_evaluation_id\n                 ~*\n                 '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'\n                THEN parameters.raw_evaluation_id::UUID\n\n            ELSE NULL::UUID\n        END\n            AS evaluation_id,\n\n        parameters.execution_id\n\n    FROM parameters\n),\n\nsource_matrix AS (\n    SELECT\n        matrix.id,\n\n        matrix.input_hash_sha256\n            AS matrix_input_hash\n\n    FROM saas.opportunity_requirement_matrices\n        AS matrix\n\n    JOIN validated_parameters\n        AS parameters\n\n        ON parameters.matrix_id =\n           matrix.id\n\n    WHERE parameters.matrix_id\n          IS NOT NULL\n\n      AND parameters.evaluation_id\n          IS NOT NULL\n),\n\nevaluation_context AS (\n    SELECT\n        evaluation.id\n            AS evaluation_id,\n\n        evaluation.organization_id\n\n    FROM saas.opportunity_compliance_evaluations\n        AS evaluation\n\n    JOIN validated_parameters\n        AS parameters\n\n        ON parameters.evaluation_id =\n           evaluation.id\n\n    WHERE parameters.matrix_id\n          IS NOT NULL\n\n      AND parameters.evaluation_id\n          IS NOT NULL\n\n      AND evaluation.matrix_id =\n          parameters.matrix_id\n),\n\ndocument_state AS (\n    SELECT\n        context.evaluation_id,\n\n        ENCODE(\n            DIGEST(\n                CONVERT_TO(\n                    COALESCE(\n                        STRING_AGG(\n                            CONCAT_WS(\n                                ':',\n\n                                document.id::TEXT,\n\n                                document.document_type,\n\n                                COALESCE(\n                                    document.issue_date::TEXT,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.expiration_date::TEXT,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.renewal_due_date::TEXT,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.alert_due_date::TEXT,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.renewal_status,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.verification_status,\n                                    ''\n                                ),\n\n                                COALESCE(\n                                    document.updated_at::TEXT,\n                                    ''\n                                )\n                            ),\n\n                            '|'\n\n                            ORDER BY\n                                document.id\n                        ),\n                        ''\n                    ),\n\n                    'UTF8'\n                ),\n\n                'sha256'\n            ),\n\n            'hex'\n        )\n            AS document_state_hash\n\n    FROM evaluation_context\n        AS context\n\n    LEFT JOIN saas.organization_documents\n        AS document\n\n        ON document.organization_id =\n           context.organization_id\n\n       AND document.document_status IN (\n           'uploaded',\n           'active'\n       )\n\n       AND document.replaced_by_document_id\n           IS NULL\n\n    GROUP BY\n        context.evaluation_id\n),\n\nupdated_evaluation AS (\n    UPDATE saas.opportunity_compliance_evaluations\n        AS evaluation\n\n    SET\n        metadata =\n            COALESCE(\n                evaluation.metadata,\n                '{}'::JSONB\n            )\n            ||\n            jsonb_build_object(\n                'matrix_input_hash',\n                source.matrix_input_hash,\n\n                'document_state_hash',\n                documents.document_state_hash,\n\n                'production_evaluation',\n                TRUE,\n\n                'production_workflow',\n                'WF-017',\n\n                'production_execution_id',\n                parameters.execution_id,\n\n                'production_evaluated_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM validated_parameters\n        AS parameters\n\n    JOIN source_matrix\n        AS source\n\n        ON source.id =\n           parameters.matrix_id\n\n    JOIN document_state\n        AS documents\n\n        ON documents.evaluation_id =\n           parameters.evaluation_id\n\n    WHERE evaluation.id =\n          parameters.evaluation_id\n\n      AND evaluation.matrix_id =\n          parameters.matrix_id\n\n    RETURNING\n        evaluation.id\n            AS evaluation_id,\n\n        evaluation.matrix_id,\n\n        evaluation.organization_id,\n\n        evaluation.process_reference,\n\n        evaluation.evaluation_status,\n\n        evaluation.overall_status,\n\n        evaluation.compliance_score,\n\n        evaluation.total_requirement_count,\n\n        evaluation.bid_requirement_count,\n\n        evaluation.compliant_count,\n\n        evaluation.expiring_count,\n\n        evaluation.expired_count,\n\n        evaluation.missing_count,\n\n        evaluation.non_compliant_count,\n\n        evaluation.manual_review_count,\n\n        evaluation.not_applicable_count,\n\n        evaluation.verification_pending_count,\n\n        evaluation.updated_at\n)\n\nSELECT\n    TRUE\n        AS matrix_processed,\n\n    'MATRIX_RESULT_REGISTERED'::TEXT\n        AS registration_status,\n\n    updated.evaluation_id,\n\n    updated.matrix_id,\n\n    updated.organization_id,\n\n    updated.process_reference,\n\n    updated.evaluation_status,\n\n    updated.overall_status,\n\n    updated.compliance_score,\n\n    updated.total_requirement_count,\n\n    updated.bid_requirement_count,\n\n    updated.compliant_count,\n\n    updated.expiring_count,\n\n    updated.expired_count,\n\n    updated.missing_count,\n\n    updated.non_compliant_count,\n\n    updated.manual_review_count,\n\n    updated.not_applicable_count,\n\n    updated.verification_pending_count,\n\n    updated.updated_at\n\nFROM updated_evaluation\n    AS updated\n\n\nUNION ALL\n\n\nSELECT\n    FALSE\n        AS matrix_processed,\n\n    'SKIPPED_INVALID_EVALUATION_IDS'::TEXT\n        AS registration_status,\n\n    parameters.evaluation_id,\n\n    parameters.matrix_id,\n\n    NULL::UUID\n        AS organization_id,\n\n    NULL::TEXT\n        AS process_reference,\n\n    'skipped'::TEXT\n        AS evaluation_status,\n\n    NULL::TEXT\n        AS overall_status,\n\n    NULL::NUMERIC\n        AS compliance_score,\n\n    0::INTEGER\n        AS total_requirement_count,\n\n    0::INTEGER\n        AS bid_requirement_count,\n\n    0::INTEGER\n        AS compliant_count,\n\n    0::INTEGER\n        AS expiring_count,\n\n    0::INTEGER\n        AS expired_count,\n\n    0::INTEGER\n        AS missing_count,\n\n    0::INTEGER\n        AS non_compliant_count,\n\n    0::INTEGER\n        AS manual_review_count,\n\n    0::INTEGER\n        AS not_applicable_count,\n\n    0::INTEGER\n        AS verification_pending_count,\n\n    NOW()\n        AS updated_at\n\nFROM validated_parameters\n    AS parameters\n\nWHERE (\n        parameters.matrix_id\n        IS NULL\n\n        OR\n\n        parameters.evaluation_id\n        IS NULL\n      )\n\n  AND NOT EXISTS (\n      SELECT 1\n      FROM updated_evaluation\n  )\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $json.matrix_id ?? \"\"\n  ),\n\n  String(\n    $json.evaluation_id ?? \"\"\n  ),\n\n  String(\n    $execution.id ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1840,
+        -464
+      ],
+      "id": "2451f33c-f6a4-49a4-81f7-bd8d16bb2a60",
+      "name": "Registrar resultado de matriz WF-017",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH execution_metrics AS (\n    SELECT\n        COUNT(*)::INTEGER\n            AS evaluated_matrices,\n\n        COUNT(*) FILTER (\n            WHERE evaluation.overall_status =\n                  'ready'\n        )::INTEGER\n            AS ready_count,\n\n        COUNT(*) FILTER (\n            WHERE evaluation.overall_status =\n                  'ready_with_warnings'\n        )::INTEGER\n            AS ready_with_warnings_count,\n\n        COUNT(*) FILTER (\n            WHERE evaluation.overall_status =\n                  'manual_review'\n        )::INTEGER\n            AS manual_review_count,\n\n        COUNT(*) FILTER (\n            WHERE evaluation.overall_status =\n                  'not_ready'\n        )::INTEGER\n            AS not_ready_count,\n\n        COALESCE(\n            SUM(\n                (\n                    evaluation.summary\n                        ->> 'mandatory_bid_blocker_count'\n                )::INTEGER\n            ),\n            0\n        )::INTEGER\n            AS mandatory_blocker_count,\n\n        COALESCE(\n            SUM(\n                (\n                    evaluation.summary\n                        ->> 'mandatory_bid_review_count'\n                )::INTEGER\n            ),\n            0\n        )::INTEGER\n            AS mandatory_review_count,\n\n        COALESCE(\n            ROUND(\n                AVG(\n                    evaluation.compliance_score\n                ),\n                2\n            ),\n            0\n        )\n            AS average_compliance_score\n\n    FROM saas.opportunity_compliance_evaluations\n        AS evaluation\n\n    WHERE evaluation.is_current =\n          TRUE\n\n      AND evaluation.evaluation_status =\n          'completed'\n\n      AND evaluation.evaluation_version =\n          3\n\n      AND evaluation.metadata\n              ->> 'production_execution_id'\n          =\n          $1::TEXT\n),\n\nfinalized_run AS (\n    UPDATE ops.workflow_runs\n        AS run\n\n    SET\n        status =\n            'success',\n\n        finished_at =\n            NOW(),\n\n        completion_reason =\n            CASE\n\n                WHEN metrics.evaluated_matrices = 0\n                    THEN 'no_matrices'\n\n                ELSE 'completed'\n\n            END,\n\n        error_message =\n            NULL,\n\n        error_details =\n            COALESCE(\n                run.error_details,\n                '{}'::JSONB\n            )\n            ||\n            jsonb_build_object(\n                'workflow_code',\n                'WF-017',\n\n                'evaluation_version',\n                3,\n\n                'evaluation_method',\n                'deterministic_v3',\n\n                'evaluated_matrices',\n                metrics.evaluated_matrices,\n\n                'ready_count',\n                metrics.ready_count,\n\n                'ready_with_warnings_count',\n                metrics.ready_with_warnings_count,\n\n                'manual_review_count',\n                metrics.manual_review_count,\n\n                'not_ready_count',\n                metrics.not_ready_count,\n\n                'mandatory_blocker_count',\n                metrics.mandatory_blocker_count,\n\n                'mandatory_review_count',\n                metrics.mandatory_review_count,\n\n                'average_compliance_score',\n                metrics.average_compliance_score,\n\n                'completed_at',\n                NOW(),\n\n                'completed_by',\n                'WF-017'\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM execution_metrics\n        AS metrics\n\n    WHERE run.workflow_code =\n          'WF-017'\n\n      AND run.n8n_execution_id =\n          $1::TEXT\n\n      AND run.status =\n          'running'\n\n    RETURNING\n        run.id,\n        run.workflow_code,\n        run.n8n_execution_id,\n        run.status,\n        run.started_at,\n        run.finished_at,\n        run.completion_reason,\n        run.error_message\n)\n\nSELECT\n    metrics.evaluated_matrices,\n\n    metrics.ready_count,\n\n    metrics.ready_with_warnings_count,\n\n    metrics.manual_review_count,\n\n    metrics.not_ready_count,\n\n    metrics.mandatory_blocker_count,\n\n    metrics.mandatory_review_count,\n\n    metrics.average_compliance_score,\n\n    COALESCE(\n        finalized.status,\n        'success'\n    )\n        AS workflow_run_status,\n\n    CASE\n\n        WHEN metrics.evaluated_matrices = 0\n            THEN 'no_matrices'\n\n        ELSE 'completed'\n\n    END\n        AS completion_reason,\n\n    EXISTS(\n        SELECT 1\n        FROM finalized_run\n    )\n        AS execution_finalized,\n\n    NOW()\n        AS finished_at\n\nFROM execution_metrics\n    AS metrics\n\nLEFT JOIN finalized_run\n    AS finalized\n\n    ON TRUE;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String($execution.id ?? \"\")\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1440,
+        -96
+      ],
+      "id": "7fe894c6-1962-4fa3-a138-96590395d125",
+      "name": "Finalizar ejecución WF-017",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH released_cursor AS (\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'success',\n\n        active_execution_id =\n            NULL,\n\n        lock_acquired_at =\n            NULL,\n\n        lock_expires_at =\n            NULL,\n\n        error_message =\n            NULL,\n\n        metadata =\n            (\n                COALESCE(\n                    cursor.metadata,\n                    '{}'::JSONB\n                )\n                -\n                'active_workflow'\n                -\n                'active_execution_id'\n                -\n                'active_execution_started_at'\n            )\n            ||\n            jsonb_build_object(\n                'last_successful_workflow',\n                'WF-017',\n\n                'last_successful_execution_id',\n                $2::TEXT,\n\n                'last_successful_finished_at',\n                NOW(),\n\n                'evaluation_version',\n                3,\n\n                'evaluation_method',\n                'deterministic_v3',\n\n                'lock_released',\n                TRUE\n            ),\n\n        updated_at =\n            NOW()\n\n    WHERE cursor.source_code =\n          $1::TEXT\n\n      AND cursor.active_execution_id::TEXT =\n          $2::TEXT\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n        cursor.error_message,\n        cursor.updated_at\n)\n\nSELECT\n    TRUE\n        AS lock_released,\n\n    released.source_code,\n\n    released.status\n        AS cursor_status,\n\n    released.active_execution_id,\n\n    released.lock_acquired_at,\n\n    released.lock_expires_at,\n\n    released.error_message,\n\n    released.updated_at\n\nFROM released_cursor\n    AS released\n\n\nUNION ALL\n\n\nSELECT\n    FALSE\n        AS lock_released,\n\n    cursor.source_code,\n\n    cursor.status\n        AS cursor_status,\n\n    cursor.active_execution_id,\n\n    cursor.lock_acquired_at,\n\n    cursor.lock_expires_at,\n\n    cursor.error_message,\n\n    cursor.updated_at\n\nFROM ops.sync_cursors\n    AS cursor\n\nWHERE cursor.source_code =\n      $1::TEXT\n\n  AND NOT EXISTS (\n      SELECT 1\n      FROM released_cursor\n  )\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-017\")\n      .first()\n      .json\n      .source_code\n  ),\n\n  String($execution.id ?? \"\")\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1648,
+        -96
+      ],
+      "id": "9020d8a6-b7d7-4365-aa08-a5b740f22bdd",
+      "name": "Liberar bloqueo WF-017",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input =\n  $input.first()?.json ?? {};\n\nreturn [\n  {\n    json: {\n      workflow_code:\n        'WF-017',\n\n      workflow_status:\n        'skipped',\n\n      completion_reason:\n        'lock_not_acquired',\n\n      lock_acquired:\n        false,\n\n      lock_route:\n        input.lock_route\n        ?? 'LOCK_NOT_ACQUIRED',\n\n      active_execution_id:\n        input.active_execution_id\n        ?? null,\n\n      lock_acquired_at:\n        input.lock_acquired_at\n        ?? null,\n\n      lock_expires_at:\n        input.lock_expires_at\n        ?? null,\n\n      message:\n        'WF-017 fue omitido porque existe otra ejecución activa.',\n\n      skipped_at:\n        new Date().toISOString(),\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        -160
+      ],
+      "id": "9a8ab687-e3c7-4890-9b58-cfc470afd05f",
+      "name": "Omitir ejecución por bloqueo WF-017"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "00ca05b7-f66f-4871-9aff-7351d140caa1",
+              "leftValue": "={{ $json.has_evaluation }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1664,
+        -336
+      ],
+      "id": "e50e200f-2f03-4b60-8f98-14e961bc3781",
+      "name": "¿Evaluación generada WF-017?"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "requested_by_user_id"
+            },
+            {
+              "name": "process_id"
+            },
+            {
+              "name": "processing_mode"
+            },
+            {
+              "name": "orchestration_execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -16,
+        80
+      ],
+      "id": "398e45c7-1f4b-4464-8046-bb4cc2de316f",
+      "name": "When Executed by Another Workflow"
+    }
+  ],
+  "connections": {
+    "Inicio Manual WF-017": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configurar procesamiento WF-017": {
+      "main": [
+        [
+          {
+            "node": "Inicializar cursor WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inicializar cursor WF-017": {
+      "main": [
+        [
+          {
+            "node": "Recuperar bloqueo vencido WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recuperar bloqueo vencido WF-017": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adquirir bloqueo WF-017": {
+      "main": [
+        [
+          {
+            "node": "Normalizar resultado de bloqueo WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar resultado de bloqueo WF-017": {
+      "main": [
+        [
+          {
+            "node": "¿Bloqueo adquirido WF-017?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Bloqueo adquirido WF-017?": {
+      "main": [
+        [
+          {
+            "node": "Registrar inicio WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Omitir ejecución por bloqueo WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar inicio WF-017": {
+      "main": [
+        [
+          {
+            "node": "Tomar matrices pendientes WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tomar matrices pendientes WF-017": {
+      "main": [
+        [
+          {
+            "node": "Normalizar resultado de matrices WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar resultado de matrices WF-017": {
+      "main": [
+        [
+          {
+            "node": "¿Hay matrices para evaluar WF-017?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay matrices para evaluar WF-017?": {
+      "main": [
+        [
+          {
+            "node": "Procesar matrices una a una WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalizar ejecución WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar matrices una a una WF-017": {
+      "main": [
+        [
+          {
+            "node": "Finalizar ejecución WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluar cumplimiento V3 WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluar cumplimiento V3 WF-017": {
+      "main": [
+        [
+          {
+            "node": "¿Evaluación generada WF-017?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar resultado de matriz WF-017": {
+      "main": [
+        [
+          {
+            "node": "Procesar matrices una a una WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalizar ejecución WF-017": {
+      "main": [
+        [
+          {
+            "node": "Liberar bloqueo WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Evaluación generada WF-017?": {
+      "main": [
+        [
+          {
+            "node": "Registrar resultado de matriz WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Procesar matrices una a una WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Liberar bloqueo WF-017": {
+      "main": [
+        []
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-017",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "CernoIAProdWF007",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Bogota",
+    "executionTimeout": 1800,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

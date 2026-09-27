@@ -1,0 +1,571 @@
+{
+  "id": "CernoIAProdWF020",
+  "name": "[CernoIA PROD] WF-020 — Control de cuota Gemini con Redis",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        -120
+      ],
+      "id": "020000000-0000-4000-8000-000000000001",
+      "name": "Inicio Manual WF-020"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "provider"
+            },
+            {
+              "name": "model_name"
+            },
+            {
+              "name": "workflow_code"
+            },
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "request_id"
+            },
+            {
+              "name": "payload_json"
+            },
+            {
+              "name": "rpm_limit"
+            },
+            {
+              "name": "rpd_limit"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -920,
+        80
+      ],
+      "id": "020000000-0000-4000-8000-000000000002",
+      "name": "Entrada desde otro workflow WF-020"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first()?.json ?? {};\nlet payload = {};\ntry {\n  payload = typeof raw.payload_json === 'string' && raw.payload_json.trim()\n    ? JSON.parse(raw.payload_json)\n    : (raw.payload && typeof raw.payload === 'object' ? raw.payload : {});\n} catch {\n  throw new Error('payload_json no contiene JSON válido para WF-020');\n}\nconst clean = (value, fallback, max = 120) => {\n  const text = String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '-').slice(0, max);\n  return text || fallback;\n};\nconst uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\nconst provider = clean(raw.provider, 'google', 40);\nconst modelName = clean(raw.model_name, 'models-gemini-3.1-flash-lite', 120);\nconst workflowCode = /^WF-\\d{3}$/i.test(String(raw.workflow_code ?? '')) ? String(raw.workflow_code).toUpperCase() : 'WF-UNKNOWN';\nconst organizationId = uuid.test(String(raw.organization_id ?? '')) ? String(raw.organization_id) : '';\nconst requestId = String(raw.request_id ?? workflowCode + '-' + $execution.id).replace(/[^a-zA-Z0-9._:-]/g, '-').slice(0, 180);\nconst optionalInteger = (value, minimum, maximum) => {\n  const parsed = Number.parseInt(String(value ?? ''), 10);\n  return Number.isFinite(parsed) && parsed > 0\n    ? Math.min(maximum, Math.max(minimum, parsed))\n    : null;\n};\nconst requestedRpmLimit = optionalInteger(raw.rpm_limit, 1, 10000);\nconst requestedRpdLimit = optionalInteger(raw.rpd_limit, 1, 10000000);\nconst parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {\n  timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit'\n}).formatToParts(new Date()).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));\nconst quotaDay = parts.year + '-' + parts.month + '-' + parts.day;\nconst dailyKey = ['cernoia', 'ai-quota', 'v1', provider, modelName, 'day', quotaDay].join(':');\nreturn [{ json: {\n  ...payload,\n  quota_payload_json: JSON.stringify(payload), provider, model_name: String(raw.model_name ?? 'models/gemini-3.1-flash-lite'),\n  model_key: modelName, workflow_code: workflowCode, organization_id: organizationId, request_id: requestId,\n  requested_rpm_limit: requestedRpmLimit, requested_rpd_limit: requestedRpdLimit,\n  quota_day: quotaDay, daily_key: dailyKey,\n  n8n_execution_id: String($execution.id ?? ''), wait_attempts: 0\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -656,
+        -16
+      ],
+      "id": "020000000-0000-4000-8000-000000000003",
+      "name": "Normalizar solicitud de cuota WF-020"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  COALESCE($3::INTEGER, policy.rpm_limit, 8)::INTEGER AS rpm_limit,\n  COALESCE($4::INTEGER, policy.rpd_limit, 400)::INTEGER AS rpd_limit,\n  CASE WHEN $3::INTEGER IS NOT NULL OR $4::INTEGER IS NOT NULL THEN 'workflow_override'\n       WHEN policy.id IS NOT NULL THEN 'database_policy' ELSE 'safe_default' END AS quota_policy_source\nFROM (SELECT 1) seed\nLEFT JOIN LATERAL (\n  SELECT id, rpm_limit, rpd_limit\n  FROM ops.ai_quota_policies\n  WHERE provider = $1 AND model_name = $2 AND is_active = TRUE\n  ORDER BY updated_at DESC\n  LIMIT 1\n) policy ON TRUE;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.provider), String($json.model_name), $json.requested_rpm_limit === null ? null : Number($json.requested_rpm_limit), $json.requested_rpd_limit === null ? null : Number($json.requested_rpd_limit) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -416,
+        -16
+      ],
+      "id": "020000000-0000-4000-8000-000000000017",
+      "name": "Cargar política de cuota WF-020",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Normalizar solicitud de cuota WF-020').first().json;\nconst rpmLimit = Math.max(1, Number($json.rpm_limit ?? 8));\nconst rpdLimit = Math.max(1, Number($json.rpd_limit ?? 400));\nreturn [{ json: { ...context, rpm_limit: rpmLimit, rpd_limit: rpdLimit,\n  quota_policy_source: String($json.quota_policy_source ?? 'safe_default') } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -176,
+        -16
+      ],
+      "id": "020000000-0000-4000-8000-000000000018",
+      "name": "Aplicar política de cuota WF-020"
+    },
+    {
+      "parameters": {
+        "operation": "incr",
+        "key": "={{ $('Aplicar política de cuota WF-020').first().json.daily_key }}",
+        "expire": true,
+        "ttl": 172800
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        64,
+        -16
+      ],
+      "id": "020000000-0000-4000-8000-000000000004",
+      "name": "Reservar cupo diario Redis WF-020",
+      "credentials": {
+        "redis": {
+          "id": "CernoIAProdRedis",
+          "name": "CernoIA Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Aplicar política de cuota WF-020').first().json;\nconst dailyUsed = Number($json[context.daily_key] ?? 0);\nreturn [{ json: { ...context, daily_used: dailyUsed, daily_allowed: dailyUsed <= context.rpd_limit } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        -16
+      ],
+      "id": "020000000-0000-4000-8000-000000000005",
+      "name": "Evaluar límite diario WF-020"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "020000000-0000-4000-8000-000000001006",
+              "leftValue": "={{ $json.daily_allowed === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        544,
+        -16
+      ],
+      "id": "020000000-0000-4000-8000-000000000006",
+      "name": "¿Hay cupo diario WF-020?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Evaluar límite diario WF-020').first().json;\nconst now = new Date();\nconst epochMinute = Math.floor(now.getTime() / 60000);\nconst minuteKey = ['cernoia', 'ai-quota', 'v1', base.provider, base.model_key, 'minute', epochMinute].join(':');\nconst waitAttempts = Number($json.wait_attempts ?? base.wait_attempts ?? 0);\nreturn [{ json: { ...base, minute_key: minuteKey, minute_epoch: epochMinute, wait_attempts: waitAttempts } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        -112
+      ],
+      "id": "020000000-0000-4000-8000-000000000007",
+      "name": "Preparar ventana por minuto WF-020"
+    },
+    {
+      "parameters": {
+        "operation": "incr",
+        "key": "={{ $('Preparar ventana por minuto WF-020').item.json.minute_key }}",
+        "expire": true,
+        "ttl": 120
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        1024,
+        -112
+      ],
+      "id": "020000000-0000-4000-8000-000000000008",
+      "name": "Reservar cupo minuto Redis WF-020",
+      "credentials": {
+        "redis": {
+          "id": "CernoIAProdRedis",
+          "name": "CernoIA Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Preparar ventana por minuto WF-020').item.json;\nconst minuteUsed = Number($json[context.minute_key] ?? 0);\nconst milliseconds = Date.now() % 60000;\nconst retryAfter = Math.max(2, Math.ceil((60000 - milliseconds) / 1000) + (context.request_id.length % 3));\nreturn [{ json: { ...context, minute_used: minuteUsed, minute_allowed: minuteUsed <= context.rpm_limit, retry_after_seconds: retryAfter } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1264,
+        -112
+      ],
+      "id": "020000000-0000-4000-8000-000000000009",
+      "name": "Evaluar límite por minuto WF-020"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "020000000-0000-4000-8000-000000001010",
+              "leftValue": "={{ $json.minute_allowed === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1504,
+        -112
+      ],
+      "id": "020000000-0000-4000-8000-000000000010",
+      "name": "¿Hay cupo por minuto WF-020?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH logged AS (\n  INSERT INTO ops.ai_quota_events\n    (provider, model_name, workflow_code, request_id, organization_id, n8n_execution_id,\n     outcome, minute_used, minute_limit, daily_used, daily_limit, retry_after_seconds, metadata)\n  VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, '')::UUID, NULLIF($6, ''),\n          'granted', $7::INTEGER, $8::INTEGER, $9::INTEGER, $10::INTEGER, 0,\n          jsonb_build_object('quota_day', $11::TEXT, 'controller', 'redis_atomic_incr_v1',\n                             'policy_source', $12::TEXT))\n  RETURNING id\n)\nSELECT id AS quota_event_id FROM logged;",
+        "options": {
+          "queryReplacement": "={{ [ $json.provider, $json.model_name, $json.workflow_code, $json.request_id, $json.organization_id, $json.n8n_execution_id, Number($json.minute_used), Number($json.rpm_limit), Number($json.daily_used), Number($json.rpd_limit), $json.quota_day, String($json.quota_policy_source ?? 'safe_default') ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1744,
+        -208
+      ],
+      "id": "020000000-0000-4000-8000-000000000011",
+      "name": "Registrar reserva concedida WF-020",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Evaluar límite por minuto WF-020').item.json;\nlet payload = {};\ntry { payload = JSON.parse(context.quota_payload_json || '{}'); } catch {}\nreturn [{ json: { ...payload, quota_granted: true, quota_reason: 'granted', quota_provider: context.provider,\n  quota_model: context.model_name, quota_minute_used: context.minute_used, quota_minute_limit: context.rpm_limit,\n  quota_daily_used: context.daily_used, quota_daily_limit: context.rpd_limit,\n  quota_policy_source: context.quota_policy_source, quota_request_id: context.request_id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        -208
+      ],
+      "id": "020000000-0000-4000-8000-000000000012",
+      "name": "Conceder llamada Gemini WF-020"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH logged AS (\n  INSERT INTO ops.ai_quota_events\n    (provider, model_name, workflow_code, request_id, organization_id, n8n_execution_id,\n     outcome, minute_used, minute_limit, daily_used, daily_limit, retry_after_seconds, metadata)\n  VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, '')::UUID, NULLIF($6, ''),\n          'minute_wait', $7::INTEGER, $8::INTEGER, $9::INTEGER, $10::INTEGER, $11::INTEGER,\n          jsonb_build_object('wait_attempt', $12::INTEGER, 'controller', 'redis_atomic_incr_v1',\n                             'policy_source', $13::TEXT))\n  RETURNING id\n)\nSELECT id AS quota_event_id, $11::INTEGER AS retry_after_seconds, ($12::INTEGER + 1) AS wait_attempts FROM logged;",
+        "options": {
+          "queryReplacement": "={{ [ $json.provider, $json.model_name, $json.workflow_code, $json.request_id, $json.organization_id, $json.n8n_execution_id, Number($json.minute_used), Number($json.rpm_limit), Number($json.daily_used), Number($json.rpd_limit), Number($json.retry_after_seconds), Number($json.wait_attempts ?? 0), String($json.quota_policy_source ?? 'safe_default') ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1744,
+        16
+      ],
+      "id": "020000000-0000-4000-8000-000000000013",
+      "name": "Registrar espera de cuota WF-020",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ Math.max(1, Number($json.retry_after_seconds ?? 5)) }}",
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1984,
+        16
+      ],
+      "id": "02000000-0000-4000-8000-000000000014",
+      "name": "Esperar próxima ventana WF-020",
+      "webhookId": "02000000-0000-4000-8000-000000000114"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH logged AS (\n  INSERT INTO ops.ai_quota_events\n    (provider, model_name, workflow_code, request_id, organization_id, n8n_execution_id,\n     outcome, minute_used, minute_limit, daily_used, daily_limit, retry_after_seconds, metadata)\n  VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, '')::UUID, NULLIF($6, ''),\n          'daily_limit', NULL, $7::INTEGER, $8::INTEGER, $9::INTEGER, NULL,\n          jsonb_build_object('quota_day', $10::TEXT, 'controller', 'redis_atomic_incr_v1',\n                             'policy_source', $11::TEXT))\n  RETURNING id\n)\nSELECT id AS quota_event_id FROM logged;",
+        "options": {
+          "queryReplacement": "={{ [ $json.provider, $json.model_name, $json.workflow_code, $json.request_id, $json.organization_id, $json.n8n_execution_id, Number($json.rpm_limit), Number($json.daily_used), Number($json.rpd_limit), $json.quota_day, String($json.quota_policy_source ?? 'safe_default') ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        784,
+        176
+      ],
+      "id": "020000000-0000-4000-8000-000000000015",
+      "name": "Registrar límite diario WF-020",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Evaluar límite diario WF-020').first().json;\nlet payload = {};\ntry { payload = JSON.parse(context.quota_payload_json || '{}'); } catch {}\nreturn [{ json: { ...payload, quota_granted: false, quota_reason: 'daily_limit', quota_provider: context.provider,\n  quota_model: context.model_name, quota_daily_used: context.daily_used, quota_daily_limit: context.rpd_limit,\n  quota_reset_timezone: 'America/Los_Angeles', quota_policy_source: context.quota_policy_source,\n  quota_request_id: context.request_id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        176
+      ],
+      "id": "020000000-0000-4000-8000-000000000016",
+      "name": "Denegar llamada por límite diario WF-020"
+    }
+  ],
+  "connections": {
+    "Inicio Manual WF-020": {
+      "main": [
+        [
+          {
+            "node": "Normalizar solicitud de cuota WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada desde otro workflow WF-020": {
+      "main": [
+        [
+          {
+            "node": "Normalizar solicitud de cuota WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar solicitud de cuota WF-020": {
+      "main": [
+        [
+          {
+            "node": "Cargar política de cuota WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cargar política de cuota WF-020": {
+      "main": [
+        [
+          {
+            "node": "Aplicar política de cuota WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aplicar política de cuota WF-020": {
+      "main": [
+        [
+          {
+            "node": "Reservar cupo diario Redis WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reservar cupo diario Redis WF-020": {
+      "main": [
+        [
+          {
+            "node": "Evaluar límite diario WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluar límite diario WF-020": {
+      "main": [
+        [
+          {
+            "node": "¿Hay cupo diario WF-020?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay cupo diario WF-020?": {
+      "main": [
+        [
+          {
+            "node": "Preparar ventana por minuto WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar límite diario WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar ventana por minuto WF-020": {
+      "main": [
+        [
+          {
+            "node": "Reservar cupo minuto Redis WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reservar cupo minuto Redis WF-020": {
+      "main": [
+        [
+          {
+            "node": "Evaluar límite por minuto WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluar límite por minuto WF-020": {
+      "main": [
+        [
+          {
+            "node": "¿Hay cupo por minuto WF-020?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay cupo por minuto WF-020?": {
+      "main": [
+        [
+          {
+            "node": "Registrar reserva concedida WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar espera de cuota WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar reserva concedida WF-020": {
+      "main": [
+        [
+          {
+            "node": "Conceder llamada Gemini WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar espera de cuota WF-020": {
+      "main": [
+        [
+          {
+            "node": "Esperar próxima ventana WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Esperar próxima ventana WF-020": {
+      "main": [
+        [
+          {
+            "node": "Preparar ventana por minuto WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar límite diario WF-020": {
+      "main": [
+        [
+          {
+            "node": "Denegar llamada por límite diario WF-020",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Bogota",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "CernoIAProdWF007",
+    "executionTimeout": 1800,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

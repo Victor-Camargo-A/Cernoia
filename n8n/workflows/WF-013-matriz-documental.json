@@ -1,0 +1,839 @@
+{
+  "id": "CernoIAProdWF013",
+  "name": "[CernoIA PROD] WF-013 - Matriz documental y requisitos de oportunidades",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        384,
+        416
+      ],
+      "id": "b95bb61b-da77-4790-be39-f3dc21d78c99",
+      "name": "Inicio Manual WF-013"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    $1::UUID\n        AS opportunity_analysis_id,\n\n    $2::UUID\n        AS organization_id,\n\n    $3::UUID\n        AS process_id,\n\n    $4::TEXT\n        AS process_reference,\n\n    $5::TEXT\n        AS process_name,\n\n    TO_JSONB(document)\n        AS document_record\n\nFROM secop.process_documents AS document\n\nWHERE document.process_id =\n    $3::UUID\n\nORDER BY\n    document.uploaded_at DESC NULLS LAST,\n    document.external_document_id ASC;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.opportunity_analysis_id,\n  $json.organization_id,\n  $json.process_id,\n  $json.process_reference ?? '',\n  $json.process_name ?? ''\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        688,
+        0
+      ],
+      "id": "706e4ed0-26ac-4cfc-8efd-5d1752e524c6",
+      "name": "Consultar documentos SECOP WF-013",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const record =\n  $json.document_record;\n\nconst isValidRecord =\n  record !== null\n  && typeof record === 'object'\n  && !Array.isArray(record)\n  && Object.keys(record).length > 0\n  && Boolean(\n    record.id\n    || record.external_document_id\n    || record.file_name\n    || record.raw_json\n  );\n\nif (!isValidRecord) {\n  return {\n    json: {\n      opportunity_analysis_id:\n        $json.opportunity_analysis_id ?? null,\n\n      organization_id:\n        $json.organization_id ?? null,\n\n      process_id:\n        $json.process_id ?? null,\n\n      process_reference:\n        $json.process_reference ?? '',\n\n      process_name:\n        $json.process_name ?? '',\n\n      has_process_document:\n        false,\n\n      document_name:\n        '',\n\n      document_type:\n        '',\n\n      file_extension:\n        '',\n\n      download_url:\n        null,\n\n      download_url_text:\n        '',\n\n      detected_categories:\n        [],\n\n      relevant_for_analysis:\n        false,\n\n      empty_document_result:\n        true,\n\n      classification_message:\n        'El proceso seleccionado no tiene documentos vinculados en secop.process_documents.',\n\n      document_record:\n        {},\n    },\n  };\n}\n\nconst firstValue = (...keys) => {\n  for (const key of keys) {\n    const value = record[key];\n\n    if (\n      value !== null\n      && value !== undefined\n      && String(value).trim() !== ''\n    ) {\n      return value;\n    }\n  }\n\n  return null;\n};\n\nconst normalizeText = (value) =>\n  String(value ?? '')\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .toLowerCase()\n    .trim();\n\nconst documentName =\n  String(\n    firstValue(\n      'file_name',\n      'document_name',\n      'name',\n      'title',\n      'titulo',\n      'nombre_documento',\n      'filename'\n    ) ?? ''\n  ).trim();\n\nconst fileExtension =\n  String(\n    firstValue(\n      'file_extension',\n      'extension',\n      'extensi_n'\n    ) ?? ''\n  )\n    .replace(/^\\./, '')\n    .trim()\n    .toLowerCase();\n\nconst documentType =\n  String(\n    firstValue(\n      'document_type',\n      'type',\n      'tipo_documento',\n      'document_category'\n    ) ?? ''\n  ).trim();\n\nconst rawDownloadUrl =\n  firstValue(\n    'download_url',\n    'url',\n    'file_url',\n    'document_url',\n    'storage_url'\n  );\n\nlet downloadUrlText = '';\n\nif (typeof rawDownloadUrl === 'string') {\n  downloadUrlText =\n    rawDownloadUrl.trim();\n} else if (\n  rawDownloadUrl\n  && typeof rawDownloadUrl === 'object'\n) {\n  downloadUrlText =\n    String(\n      rawDownloadUrl.url\n      ?? rawDownloadUrl.href\n      ?? rawDownloadUrl.download\n      ?? ''\n    ).trim();\n}\n\nif (!downloadUrlText) {\n  downloadUrlText =\n    String(\n      record.download_url_text\n      ?? record.raw_json\n          ?.url_descarga_documento\n          ?.url\n      ?? ''\n    ).trim();\n}\n\nconst searchableText =\n  normalizeText(\n    [\n      documentName,\n      record.description,\n      record.raw_json?.nombre_archivo,\n      record.raw_json?.descripci_n,\n    ].join(' ')\n  );\n\nconst categories = [];\n\nconst addCategory = (\n  category,\n  keywords\n) => {\n  if (\n    keywords.some(\n      (keyword) =>\n        searchableText.includes(keyword)\n    )\n  ) {\n    categories.push(category);\n  }\n};\n\naddCategory(\n  'invitation_or_terms',\n  [\n    'invitacion',\n    'pliego',\n    'terminos',\n    'condiciones',\n  ]\n);\n\naddCategory(\n  'previous_studies',\n  [\n    'estudio previo',\n    'estudios previos',\n  ]\n);\n\naddCategory(\n  'technical_annex',\n  [\n    'anexo tecnico',\n    'ficha tecnica',\n    'especificaciones tecnicas',\n  ]\n);\n\naddCategory(\n  'economic_offer_template',\n  [\n    'oferta economica',\n    'propuesta economica',\n    'formato economico',\n  ]\n);\n\naddCategory(\n  'entity_template',\n  [\n    'formato',\n    'carta de presentacion',\n    'declaracion',\n    'manifestacion',\n    'compromiso',\n  ]\n);\n\naddCategory(\n  'addendum',\n  [\n    'adenda',\n    'modificacion',\n  ]\n);\n\naddCategory(\n  'risk_matrix',\n  [\n    'matriz de riesgos',\n    'matriz de riesgo',\n  ]\n);\n\nconst uniqueCategories =\n  [...new Set(categories)];\n\nconst relevantForAnalysis =\n  uniqueCategories.length > 0;\n\nconst supportedExtensions =\n  new Set([\n    'pdf',\n    'doc',\n    'docx',\n    'xls',\n    'xlsx',\n    'odt',\n    'ods',\n  ]);\n\nconst hasDownloadUrl =\n  Boolean(downloadUrlText);\n\nconst supportedFile =\n  supportedExtensions.has(\n    fileExtension\n  );\n\nreturn {\n  json: {\n    opportunity_analysis_id:\n      $json.opportunity_analysis_id,\n\n    organization_id:\n      $json.organization_id,\n\n    process_id:\n      $json.process_id,\n\n    process_reference:\n      $json.process_reference,\n\n    process_name:\n      $json.process_name,\n\n    has_process_document:\n      true,\n\n    process_document_id:\n      record.id ?? null,\n\n    external_document_id:\n      record.external_document_id ?? null,\n\n    document_name:\n      documentName,\n\n    document_type:\n      documentType,\n\n    file_extension:\n      fileExtension,\n\n    description:\n      String(\n        record.description ?? ''\n      ),\n\n    download_url:\n      rawDownloadUrl ?? null,\n\n    download_url_text:\n      downloadUrlText,\n\n    detected_categories:\n      uniqueCategories,\n\n    primary_category:\n      uniqueCategories[0]\n      ?? 'other',\n\n    relevant_for_analysis:\n      relevantForAnalysis,\n\n    has_download_url:\n      hasDownloadUrl,\n\n    supported_file:\n      supportedFile,\n\n    download_candidate:\n      hasDownloadUrl\n      && supportedFile\n      && relevantForAnalysis,\n\n    needs_manual_review:\n      !relevantForAnalysis,\n\n    empty_document_result:\n      false,\n\n    classified_at:\n      new Date().toISOString(),\n\n    document_record:\n      record,\n  },\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        848,
+        0
+      ],
+      "id": "5d264b8d-d698-46de-bc9f-25391f46e59c",
+      "name": "Clasificar metadatos documentales WF-013"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f6203b6e-aa18-460f-9a55-d8d0ea46c34d",
+              "name": "max_documents_per_opportunity",
+              "value": "={{ $json.max_documents_per_opportunity ?? 30 }}",
+              "type": "number"
+            },
+            {
+              "id": "0933804d-2a7b-4c5e-b9a5-ac6dde04b0ea",
+              "name": "max_opportunities_per_organization",
+              "value": "={{ $json.max_opportunities_per_organization ?? 5 }}",
+              "type": "number"
+            },
+            {
+              "id": "65109341-f004-4a11-b3e4-eb19223fb590",
+              "name": "processing_scope",
+              "value": "={{ $json.processing_scope ?? 'requested_organization_or_all' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {},
+        "includeOtherFields": true
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        384,
+        192
+      ],
+      "id": "8ff9c810-db3f-4315-9194-b983f5ba0959",
+      "name": "Configurar procesamiento WF-013"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH config AS (\n    SELECT\n        GREATEST(\n            1,\n            LEAST(\n                COALESCE(\n                    $1::INTEGER,\n                    5\n                ),\n                50\n            )\n        ) AS max_opportunities_per_organization,\n\n        GREATEST(\n            1,\n            LEAST(\n                COALESCE(\n                    $2::INTEGER,\n                    30\n                ),\n                100\n            )\n        ) AS max_documents_per_opportunity\n),\n\nlatest_analysis AS (\n    SELECT DISTINCT ON (\n        analysis.organization_id,\n        analysis.process_id\n    )\n        analysis.id\n            AS opportunity_analysis_id,\n\n        analysis.organization_id,\n        analysis.search_profile_id,\n        analysis.process_match_id,\n        analysis.process_id,\n\n        analysis.compatibility_score,\n        analysis.confidence_score,\n        analysis.decision,\n        analysis.executive_summary,\n\n        COALESCE(\n            analysis.process_snapshot,\n            '{}'::JSONB\n        ) AS process_snapshot,\n\n        analysis.updated_at\n\n    FROM saas.opportunity_ai_analyses\n        AS analysis\n\n    JOIN saas.organizations\n        AS organization\n        ON organization.id =\n           analysis.organization_id\n\n    WHERE organization.status IN (\n        'active',\n        'trial'\n    )\n\n      AND analysis.analysis_status =\n        'success'\n\n      AND (NULLIF($3::TEXT, '') IS NULL OR analysis.organization_id = NULLIF($3::TEXT, '')::UUID)\n      AND (NULLIF($4::TEXT, '') IS NULL OR analysis.process_id = NULLIF($4::TEXT, '')::UUID)\n\n      AND analysis.decision IN (\n          'participar',\n          'revisar'\n      )\n\n    ORDER BY\n        analysis.organization_id,\n        analysis.process_id,\n        analysis.updated_at DESC\n),\n\neligible_opportunities AS (\n    SELECT\n        analysis.opportunity_analysis_id,\n\n        analysis.organization_id,\n        analysis.search_profile_id,\n        analysis.process_match_id,\n        analysis.process_id,\n\n        organization.name\n            AS organization_name,\n\n        organization.slug\n            AS organization_slug,\n\n        analysis.compatibility_score,\n        analysis.confidence_score,\n        analysis.decision,\n        analysis.executive_summary,\n\n        process.secop_process_id,\n\n        COALESCE(\n            NULLIF(\n                analysis.process_snapshot\n                    ->> 'reference',\n                ''\n            ),\n            process.reference\n        ) AS process_reference,\n\n        COALESCE(\n            NULLIF(\n                analysis.process_snapshot\n                    ->> 'process_name',\n                ''\n            ),\n            process.process_name\n        ) AS process_name,\n\n        COALESCE(\n            NULLIF(\n                analysis.process_snapshot\n                    ->> 'description',\n                ''\n            ),\n            process.process_name\n        ) AS process_description,\n\n        COALESCE(\n            NULLIF(\n                analysis.process_snapshot\n                    ->> 'entity_name',\n                ''\n            ),\n            process.entity_name\n        ) AS entity_name,\n\n        COALESCE(\n            NULLIF(\n                analysis.process_snapshot\n                    ->> 'procurement_method',\n                ''\n            ),\n            process.procurement_method\n        ) AS procurement_method,\n\n        COALESCE(\n            NULLIF(\n                analysis.process_snapshot\n                    ->> 'base_price',\n                ''\n            ),\n            process.base_price::TEXT\n        ) AS base_price,\n\n        process.process_status,\n\n        document_summary.documents_count,\n\n        config.max_documents_per_opportunity,\n\n        analysis.process_snapshot,\n\n        ROW_NUMBER() OVER (\n            PARTITION BY\n                analysis.organization_id\n\n            ORDER BY\n                CASE\n                    WHEN analysis.decision =\n                        'participar'\n                        THEN 0\n\n                    ELSE 1\n                END,\n\n                analysis.compatibility_score\n                    DESC NULLS LAST,\n\n                analysis.confidence_score\n                    DESC NULLS LAST,\n\n                analysis.updated_at DESC,\n\n                analysis.process_id\n        ) AS organization_rank\n\n    FROM latest_analysis AS analysis\n\n    JOIN saas.organizations\n        AS organization\n        ON organization.id =\n           analysis.organization_id\n\n    JOIN secop.processes\n        AS process\n        ON process.id =\n           analysis.process_id\n\n    CROSS JOIN config\n\n    JOIN LATERAL (\n        SELECT\n            COUNT(*)::INTEGER\n                AS documents_count\n\n        FROM secop.process_documents\n            AS document\n\n        WHERE document.process_id =\n            analysis.process_id\n    ) AS document_summary\n        ON document_summary.documents_count > 0\n)\n\nSELECT\n    opportunity.opportunity_analysis_id,\n\n    opportunity.organization_id,\n    opportunity.organization_name,\n    opportunity.organization_slug,\n\n    opportunity.search_profile_id,\n    opportunity.process_match_id,\n    opportunity.process_id,\n\n    opportunity.compatibility_score,\n    opportunity.confidence_score,\n    opportunity.decision,\n    opportunity.executive_summary,\n\n    opportunity.secop_process_id,\n    opportunity.process_reference,\n    opportunity.process_name,\n    opportunity.process_description,\n\n    opportunity.entity_name,\n    opportunity.procurement_method,\n    opportunity.base_price,\n    opportunity.process_status,\n\n    opportunity.documents_count,\n    opportunity.max_documents_per_opportunity,\n\n    opportunity.organization_rank,\n    opportunity.process_snapshot\n\nFROM eligible_opportunities\n    AS opportunity\n\nCROSS JOIN config\n\nWHERE opportunity.organization_rank <=\n    config.max_opportunities_per_organization\n\nORDER BY\n    opportunity.organization_name,\n    opportunity.organization_rank;",
+        "options": {
+          "queryReplacement": "={{ [ Number($json.max_opportunities_per_organization ?? 5), Number($json.max_documents_per_opportunity ?? 30), String($json.organization_id ?? ''), String($json.process_id ?? '') ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        384,
+        0
+      ],
+      "id": "e3a6b596-3e95-49fd-bc04-ccd9b9660958",
+      "name": "Seleccionar oportunidades objetivo WF-013",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "292a2a58-d9bf-4bf7-a37e-8c44a642d2d7",
+              "leftValue": "={{ Boolean($json.opportunity_analysis_id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        560,
+        144
+      ],
+      "id": "18e6b7fd-680a-43ff-8e43-49ed292e42a8",
+      "name": "¿Hay oportunidades objetivo WF-013?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7fe44415-8ec9-4835-8243-31664d650fe0",
+              "leftValue": "={{ $json.download_candidate === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        816,
+        192
+      ],
+      "id": "7057d8bf-f487-4547-8415-72bf4a657c93",
+      "name": "¿Documento relevante y descargable WF-013?"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0b1fccb2-4719-4dc3-b822-9a2868ca0ba2",
+              "name": "selected_for_download",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "5bdeefbd-724d-496d-9c38-e1aad0ce7103",
+              "name": "analysis_status",
+              "value": "metadata_only",
+              "type": "string"
+            },
+            {
+              "id": "a0ce650a-7062-4938-b31c-55cc2c70890b",
+              "name": "classification_status",
+              "value": "={{ $json.needs_manual_review === true ? \"manual_review\" : \"not_relevant\" }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1040,
+        208
+      ],
+      "id": "1daf39f2-4ae5-4bcd-acd5-5a8eb435c23c",
+      "name": "Preparar documento secundario WF-"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7a8c4c7e-8c20-4565-b3cb-f5d64df4cdd6",
+              "name": "download_status",
+              "value": "pending_download",
+              "type": "string"
+            },
+            {
+              "id": "1637752a-f5e0-4a8f-9ce9-72c1b3e92aac",
+              "name": "analysis_status",
+              "value": "pending_extraction",
+              "type": "string"
+            },
+            {
+              "id": "fea51610-d594-46dc-b761-a03bbbc17741",
+              "name": "selected_for_download",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "bb0ab60b-d22b-4fb5-b4a3-ee288eb0d0f9",
+              "name": "selected_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        704,
+        400
+      ],
+      "id": "51ac159f-ae5c-4cc5-90e2-187e5f933a8b",
+      "name": "Preparar descarga documental WF-013"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1040,
+        384
+      ],
+      "id": "fb9ae08c-9b7b-4fd5-91a1-71b6f61aaa5f",
+      "name": "Procesar descargas una a una WF-013"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.download_url_text }}",
+        "options": {
+          "redirect": {
+            "redirect": {}
+          },
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 100000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1408,
+        400
+      ],
+      "id": "7b99b5a7-6216-48ff-a542-933103b03d35",
+      "name": "Descargar documento SECOP WF-013",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1040,
+        -16
+      ],
+      "id": "27a2495a-c205-4459-b4fd-44b3e764e073",
+      "name": "Combinar contexto y archivo descargado WF-013"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const binaryData = $binary ?? {};\nconst downloadedFile = binaryData.data ?? null;\n\nconst downloadSuccess =\n  downloadedFile !== null\n  && typeof downloadedFile === 'object';\n\nlet errorMessage = null;\n\nif (!downloadSuccess) {\n  const possibleError =\n    $json.error\n    ?? $json.message\n    ?? $json.statusMessage\n    ?? $json.cause\n    ?? null;\n\n  if (possibleError !== null) {\n    errorMessage =\n      typeof possibleError === 'object'\n        ? JSON.stringify(possibleError)\n        : String(possibleError);\n  } else {\n    errorMessage =\n      'El servidor no devolvió un archivo binario.';\n  }\n}\n\nreturn {\n  json: {\n    ...$json,\n\n    download_success:\n      downloadSuccess,\n\n    download_status:\n      downloadSuccess\n        ? 'downloaded'\n        : 'failed',\n\n    downloaded_filename:\n      downloadSuccess\n        ? String(\n            downloadedFile.fileName\n            ?? $json.document_name\n            ?? 'documento'\n          )\n        : null,\n\n    downloaded_mime_type:\n      downloadSuccess\n        ? String(\n            downloadedFile.mimeType\n            ?? ''\n          )\n        : null,\n\n    downloaded_file_extension:\n      downloadSuccess\n        ? String(\n            downloadedFile.fileExtension\n            ?? $json.file_extension\n            ?? ''\n          )\n        : null,\n\n    downloaded_file_size:\n      downloadSuccess\n        ? (\n            downloadedFile.fileSize\n            ?? null\n          )\n        : null,\n\n    download_error:\n      errorMessage,\n\n    downloaded_at:\n      new Date().toISOString(),\n  },\n\n  binary:\n    binaryData,\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1264,
+        -16
+      ],
+      "id": "7540452c-f10f-458d-93e1-4258910f3f81",
+      "name": "Validar descarga WF-013"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "b1ba590e-787c-48c8-88c5-7a3ea80e93a3",
+              "leftValue": "={{ $json.download_success === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1456,
+        16
+      ],
+      "id": "c80c23f5-a0e9-4ffb-8afb-f5a0d26cb6de",
+      "name": "¿Descarga exitosa WF-013?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1856,
+        32
+      ],
+      "id": "dc561d11-f1c1-4b17-8676-5546c2a0800d",
+      "name": "Pausa entre descargas WF-013",
+      "webhookId": "bff67e3c-78e0-45ef-9801-568045a574b7"
+    },
+    {
+      "parameters": {
+        "binaryData": true,
+        "dataPropertyName": "download_sha256"
+      },
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        1456,
+        -128
+      ],
+      "id": "07c37961-aae7-49c8-991d-c73c8e553e7f",
+      "name": "Calcular hash descarga WF-013"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const parseFileSize = (value) => {\n  if (\n    typeof value === 'number'\n    && Number.isFinite(value)\n    && value > 0\n  ) {\n    return Math.round(value);\n  }\n\n  const text = String(value ?? '')\n    .trim()\n    .toLowerCase();\n\n  if (!text) {\n    return null;\n  }\n\n  const match = text.match(\n    /^([\\d.,]+)\\s*(b|kb|kib|mb|mib|gb|gib)?$/i\n  );\n\n  if (!match) {\n    return null;\n  }\n\n  const normalizedAmount = match[1]\n    .replace(/\\s/g, '')\n    .replace(',', '.');\n\n  const amount = Number(normalizedAmount);\n\n  if (\n    !Number.isFinite(amount)\n    || amount <= 0\n  ) {\n    return null;\n  }\n\n  const unit = String(\n    match[2] ?? 'b'\n  ).toLowerCase();\n\n  const multipliers = {\n    b: 1,\n    kb: 1000,\n    kib: 1024,\n    mb: 1000 ** 2,\n    mib: 1024 ** 2,\n    gb: 1000 ** 3,\n    gib: 1024 ** 3,\n  };\n\n  return Math.round(\n    amount * (multipliers[unit] ?? 1)\n  );\n};\n\n\n// Archivo binario descargado\nconst binaryData = $binary ?? {};\nconst downloadedFile = binaryData.data ?? null;\n\n\n// Primera opción: tamaño calculado por el nodo de validación\nconst sizeFromValidation = parseFileSize(\n  $json.downloaded_file_size\n);\n\n\n// Segunda opción: tamaño almacenado en el binario\nconst sizeFromBinary = parseFileSize(\n  downloadedFile?.fileSize\n);\n\n\n// Tercera opción: tamaño informado por SECOP\nconst rawSourceSize = Number(\n  $json.document_record?.file_size_bytes\n  ?? 0\n);\n\nconst sizeFromSource =\n  Number.isFinite(rawSourceSize)\n  && rawSourceSize > 0\n    ? Math.round(rawSourceSize)\n    : null;\n\n\n// Se toma el primer tamaño válido disponible\nconst downloadedFileSizeBytes =\n  sizeFromValidation\n  ?? sizeFromBinary\n  ?? sizeFromSource\n  ?? null;\n\n\n// Hash calculado por el nodo Crypto\nconst downloadSha256 = String(\n  $json.download_sha256\n  ?? $json.hash\n  ?? ''\n).trim().toLowerCase();\n\n\n// Metadatos para auditoría\nconst registrationMetadata = {\n  workflow_code:\n    'WF-013',\n\n  n8n_execution_id:\n    String($execution.id ?? ''),\n\n  process_reference:\n    $json.process_reference\n    ?? null,\n\n  process_document_id:\n    $json.process_document_id\n    ?? null,\n\n  external_document_id:\n    $json.external_document_id\n    ?? null,\n\n  source_download_url:\n    $json.download_url_text\n    ?? null,\n\n  classified_at:\n    $json.classified_at\n    ?? null,\n\n  selected_at:\n    $json.selected_at\n    ?? null,\n\n  downloaded_at:\n    $json.downloaded_at\n    ?? new Date().toISOString(),\n\n  registered_at:\n    new Date().toISOString(),\n};\n\n\nreturn {\n  json: {\n    ...$json,\n\n    download_sha256:\n      downloadSha256 || null,\n\n    downloaded_file_size_bytes:\n      downloadedFileSizeBytes,\n\n    downloaded_mime_type:\n      String(\n        $json.downloaded_mime_type\n        ?? downloadedFile?.mimeType\n        ?? ''\n      ).trim() || null,\n\n    downloaded_file_extension:\n      String(\n        $json.downloaded_file_extension\n        ?? downloadedFile?.fileExtension\n        ?? $json.file_extension\n        ?? ''\n      )\n        .trim()\n        .toLowerCase()\n        || null,\n\n    downloaded_filename:\n      String(\n        $json.downloaded_filename\n        ?? downloadedFile?.fileName\n        ?? $json.document_name\n        ?? 'documento'\n      ).trim(),\n\n    registration_metadata:\n      registrationMetadata,\n\n    prepared_for_registration_at:\n      new Date().toISOString(),\n  },\n\n  binary:\n    binaryData,\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1664,
+        -128
+      ],
+      "id": "6b5afd1f-f7e4-42e5-b44e-c2da8f1742cd",
+      "name": "Preparar registro descarga WF-013"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO saas.opportunity_documents AS target (\n    organization_id,\n    opportunity_analysis_id,\n    process_id,\n    process_document_id,\n\n    process_reference,\n    document_name,\n    source_file_extension,\n    source_download_url,\n    source_file_size_bytes,\n\n    primary_category,\n    detected_categories,\n    relevant_for_analysis,\n    selected_for_download,\n\n    download_status,\n    download_attempt_count,\n    last_download_attempt_at,\n    downloaded_at,\n\n    download_sha256,\n    downloaded_mime_type,\n    downloaded_file_extension,\n    downloaded_file_size_bytes,\n    download_error,\n\n    extraction_status,\n    ai_requirement_status,\n\n    metadata,\n    created_at,\n    updated_at\n)\n\nVALUES (\n    $1::UUID,\n    $2::UUID,\n    $3::UUID,\n    $4::UUID,\n\n    NULLIF($5::TEXT, ''),\n    $6::TEXT,\n    NULLIF($7::TEXT, ''),\n    NULLIF($8::TEXT, ''),\n    $9::BIGINT,\n\n    COALESCE(\n        NULLIF($10::TEXT, ''),\n        'other'\n    ),\n\n    COALESCE(\n        $11::JSONB,\n        '[]'::JSONB\n    ),\n\n    $12::BOOLEAN,\n    TRUE,\n\n    'downloaded',\n    1,\n    NOW(),\n    NOW(),\n\n    NULLIF($13::TEXT, ''),\n    NULLIF($14::TEXT, ''),\n    NULLIF($15::TEXT, ''),\n    $16::BIGINT,\n    NULL,\n\n    'pending',\n    'not_requested',\n\n    COALESCE(\n        $17::JSONB,\n        '{}'::JSONB\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (\n    organization_id,\n    opportunity_analysis_id,\n    process_document_id\n)\n\nDO UPDATE SET\n    process_id =\n        EXCLUDED.process_id,\n\n    process_reference =\n        EXCLUDED.process_reference,\n\n    document_name =\n        EXCLUDED.document_name,\n\n    source_file_extension =\n        EXCLUDED.source_file_extension,\n\n    source_download_url =\n        EXCLUDED.source_download_url,\n\n    source_file_size_bytes =\n        EXCLUDED.source_file_size_bytes,\n\n    primary_category =\n        EXCLUDED.primary_category,\n\n    detected_categories =\n        EXCLUDED.detected_categories,\n\n    relevant_for_analysis =\n        EXCLUDED.relevant_for_analysis,\n\n    selected_for_download =\n        TRUE,\n\n    download_status =\n        'downloaded',\n\n    download_attempt_count =\n        target.download_attempt_count + 1,\n\n    last_download_attempt_at =\n        NOW(),\n\n    downloaded_at =\n        NOW(),\n\n    download_sha256 =\n        EXCLUDED.download_sha256,\n\n    downloaded_mime_type =\n        EXCLUDED.downloaded_mime_type,\n\n    downloaded_file_extension =\n        EXCLUDED.downloaded_file_extension,\n\n    downloaded_file_size_bytes =\n        EXCLUDED.downloaded_file_size_bytes,\n\n    download_error =\n        NULL,\n\n    extraction_status =\n        CASE\n            WHEN target.download_sha256\n                IS DISTINCT FROM\n                EXCLUDED.download_sha256\n                THEN 'pending'\n\n            WHEN target.extraction_status IN (\n                'not_requested',\n                'failed',\n                'unsupported'\n            )\n                THEN 'pending'\n\n            ELSE target.extraction_status\n        END,\n\n    metadata =\n        COALESCE(\n            target.metadata,\n            '{}'::JSONB\n        )\n        || EXCLUDED.metadata,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    target.id\n        AS opportunity_document_id,\n\n    target.organization_id,\n    target.opportunity_analysis_id,\n    target.process_id,\n    target.process_document_id,\n\n    target.document_name,\n    target.primary_category,\n\n    target.download_status,\n    target.download_attempt_count,\n    target.download_sha256,\n\n    target.extraction_status,\n\n    'download_success'\n        AS document_result_type,\n\n    target.updated_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.organization_id,\n  $json.opportunity_analysis_id,\n  $json.process_id,\n  $json.process_document_id,\n\n  $json.process_reference ?? '',\n  $json.document_name ?? '',\n  $json.file_extension ?? '',\n  $json.download_url_text ?? '',\n  Number(\n    $json.document_record?.file_size_bytes\n    ?? 0\n  ) || null,\n\n  $json.primary_category ?? 'other',\n\n  JSON.stringify(\n    $json.detected_categories\n    ?? []\n  ),\n\n  Boolean(\n    $json.relevant_for_analysis\n  ),\n\n  $json.download_sha256 ?? '',\n\n  $json.downloaded_mime_type\n    ?? '',\n\n  $json.downloaded_file_extension\n    ?? $json.file_extension\n    ?? '',\n\n  Number(\n    $json.downloaded_file_size_bytes\n    ?? 0\n  ) || null,\n\n  JSON.stringify(\n    $json.registration_metadata\n    ?? {}\n  )\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1856,
+        -128
+      ],
+      "id": "23cf2cdd-a296-4694-ab46-c99763626f9c",
+      "name": "Registrar descarga exitosa WF-013",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO saas.opportunity_documents AS target (\n    organization_id,\n    opportunity_analysis_id,\n    process_id,\n    process_document_id,\n\n    process_reference,\n    document_name,\n    source_file_extension,\n    source_download_url,\n    source_file_size_bytes,\n\n    primary_category,\n    detected_categories,\n    relevant_for_analysis,\n    selected_for_download,\n\n    download_status,\n    download_attempt_count,\n    last_download_attempt_at,\n    download_error,\n\n    extraction_status,\n    ai_requirement_status,\n\n    metadata,\n    created_at,\n    updated_at\n)\n\nVALUES (\n    $1::UUID,\n    $2::UUID,\n    $3::UUID,\n    $4::UUID,\n\n    NULLIF($5::TEXT, ''),\n    $6::TEXT,\n    NULLIF($7::TEXT, ''),\n    NULLIF($8::TEXT, ''),\n    $9::BIGINT,\n\n    COALESCE(\n        NULLIF($10::TEXT, ''),\n        'other'\n    ),\n\n    COALESCE(\n        $11::JSONB,\n        '[]'::JSONB\n    ),\n\n    $12::BOOLEAN,\n    TRUE,\n\n    'failed',\n    1,\n    NOW(),\n    NULLIF($13::TEXT, ''),\n\n    'not_requested',\n    'not_requested',\n\n    COALESCE(\n        $14::JSONB,\n        '{}'::JSONB\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (\n    organization_id,\n    opportunity_analysis_id,\n    process_document_id\n)\n\nDO UPDATE SET\n    selected_for_download =\n        TRUE,\n\n    download_status =\n        'failed',\n\n    download_attempt_count =\n        target.download_attempt_count + 1,\n\n    last_download_attempt_at =\n        NOW(),\n\n    download_error =\n        EXCLUDED.download_error,\n\n    metadata =\n        COALESCE(\n            target.metadata,\n            '{}'::JSONB\n        )\n        || EXCLUDED.metadata,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    target.id\n        AS opportunity_document_id,\n\n    target.organization_id,\n    target.opportunity_analysis_id,\n    target.process_id,\n    target.process_document_id,\n\n    target.document_name,\n    target.download_status,\n    target.download_attempt_count,\n    target.download_error,\n\n    'download_failed'\n        AS document_result_type,\n\n    target.updated_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.organization_id,\n  $json.opportunity_analysis_id,\n  $json.process_id,\n  $json.process_document_id,\n\n  $json.process_reference ?? '',\n  $json.document_name ?? '',\n  $json.file_extension ?? '',\n  $json.download_url_text ?? '',\n\n  Number(\n    $json.document_record?.file_size_bytes\n    ?? 0\n  ) || null,\n\n  $json.primary_category ?? 'other',\n\n  JSON.stringify(\n    $json.detected_categories\n    ?? []\n  ),\n\n  Boolean(\n    $json.relevant_for_analysis\n  ),\n\n  $json.download_error\n    ?? $json.error?.message\n    ?? $json.message\n    ?? 'Error desconocido al descargar el documento.',\n\n  JSON.stringify({\n    workflow_code:\n      'WF-013',\n\n    n8n_execution_id:\n      String(\n        $execution.id\n        ?? ''\n      ),\n\n    failed_at:\n      new Date().toISOString()\n  })\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1664,
+        32
+      ],
+      "id": "fd755920-13ca-42b8-8cf0-c6d382a2a692",
+      "name": "Registrar descarga fallida WF-013",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO saas.opportunity_documents AS target (\n    organization_id,\n    opportunity_analysis_id,\n    process_id,\n    process_document_id,\n\n    process_reference,\n    document_name,\n    source_file_extension,\n    source_download_url,\n    source_file_size_bytes,\n\n    primary_category,\n    detected_categories,\n    relevant_for_analysis,\n    selected_for_download,\n\n    download_status,\n    extraction_status,\n    ai_requirement_status,\n\n    metadata,\n    created_at,\n    updated_at\n)\n\nVALUES (\n    $1::UUID,\n    $2::UUID,\n    $3::UUID,\n    $4::UUID,\n\n    NULLIF($5::TEXT, ''),\n    $6::TEXT,\n    NULLIF($7::TEXT, ''),\n    NULLIF($8::TEXT, ''),\n    $9::BIGINT,\n\n    COALESCE(\n        NULLIF($10::TEXT, ''),\n        'other'\n    ),\n\n    COALESCE(\n        $11::JSONB,\n        '[]'::JSONB\n    ),\n\n    $12::BOOLEAN,\n    FALSE,\n\n    'skipped',\n    'not_requested',\n    'not_requested',\n\n    COALESCE(\n        $13::JSONB,\n        '{}'::JSONB\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (\n    organization_id,\n    opportunity_analysis_id,\n    process_document_id\n)\n\nDO UPDATE SET\n    process_reference =\n        EXCLUDED.process_reference,\n\n    document_name =\n        EXCLUDED.document_name,\n\n    source_file_extension =\n        EXCLUDED.source_file_extension,\n\n    source_download_url =\n        EXCLUDED.source_download_url,\n\n    source_file_size_bytes =\n        EXCLUDED.source_file_size_bytes,\n\n    primary_category =\n        EXCLUDED.primary_category,\n\n    detected_categories =\n        EXCLUDED.detected_categories,\n\n    relevant_for_analysis =\n        EXCLUDED.relevant_for_analysis,\n\n    selected_for_download =\n        CASE\n            WHEN target.download_status =\n                'downloaded'\n                THEN target.selected_for_download\n\n            ELSE FALSE\n        END,\n\n    download_status =\n        CASE\n            WHEN target.download_status =\n                'downloaded'\n                THEN target.download_status\n\n            ELSE 'skipped'\n        END,\n\n    metadata =\n        COALESCE(\n            target.metadata,\n            '{}'::JSONB\n        )\n        || EXCLUDED.metadata,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    target.id\n        AS opportunity_document_id,\n\n    target.organization_id,\n    target.opportunity_analysis_id,\n    target.process_id,\n    target.process_document_id,\n\n    target.document_name,\n    target.primary_category,\n\n    target.download_status,\n    target.extraction_status,\n\n    'secondary_document'\n        AS document_result_type,\n\n    target.updated_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.organization_id,\n  $json.opportunity_analysis_id,\n  $json.process_id,\n  $json.process_document_id,\n\n  $json.process_reference ?? '',\n  $json.document_name ?? '',\n  $json.file_extension ?? '',\n  $json.download_url_text ?? '',\n\n  Number(\n    $json.document_record?.file_size_bytes\n    ?? 0\n  ) || null,\n\n  $json.primary_category ?? 'other',\n\n  JSON.stringify(\n    $json.detected_categories\n    ?? []\n  ),\n\n  Boolean(\n    $json.relevant_for_analysis\n  ),\n\n  JSON.stringify({\n    workflow_code:\n      'WF-013',\n\n    n8n_execution_id:\n      String(\n        $execution.id\n        ?? ''\n      ),\n\n    classification_status:\n      $json.classification_status\n      ?? 'manual_review',\n\n    registered_at:\n      new Date().toISOString()\n  })\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1248,
+        208
+      ],
+      "id": "8ad5ea82-b24a-4e7d-afb7-8461b18b5031",
+      "name": "Registrar documento secundario WF-013",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items =\n  $input.all();\n\nconst opportunityIds =\n  [\n    ...new Set(\n      items\n        .map(\n          (item) =>\n            item.json\n              .opportunity_analysis_id\n        )\n        .filter(Boolean)\n    )\n  ];\n\nreturn [\n  {\n    json: {\n      opportunity_analysis_ids:\n        opportunityIds,\n\n      opportunity_analysis_ids_json:\n        JSON.stringify(\n          opportunityIds\n        ),\n\n      processed_download_results:\n        items.length,\n\n      prepared_at:\n        new Date().toISOString(),\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        368
+      ],
+      "id": "8defaa5c-5a65-4935-98a4-cec5cc88d9c4",
+      "name": "Preparar resumen documental WF-013"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH target_analyses AS (\n    SELECT\n        value::UUID\n            AS opportunity_analysis_id\n\n    FROM jsonb_array_elements_text(\n        $1::JSONB\n    )\n)\n\nSELECT\n    document.organization_id,\n    document.opportunity_analysis_id,\n    document.process_id,\n    document.process_reference,\n\n    COUNT(*)\n        AS total_documents,\n\n    COUNT(*) FILTER (\n        WHERE document.selected_for_download =\n            TRUE\n    ) AS selected_documents,\n\n    COUNT(*) FILTER (\n        WHERE document.download_status =\n            'downloaded'\n    ) AS downloaded_documents,\n\n    COUNT(*) FILTER (\n        WHERE document.download_status =\n            'failed'\n    ) AS failed_documents,\n\n    COUNT(*) FILTER (\n        WHERE document.download_status =\n            'skipped'\n    ) AS secondary_documents,\n\n    COUNT(*) FILTER (\n        WHERE document.extraction_status =\n            'pending'\n    ) AS pending_extraction,\n\n    COUNT(*) FILTER (\n        WHERE document.extraction_status =\n            'extracted'\n    ) AS extracted_documents,\n\n    COUNT(*) FILTER (\n        WHERE document.ai_requirement_status =\n            'success'\n    ) AS ai_analyzed_documents,\n\n    MAX(document.updated_at)\n        AS last_updated_at\n\nFROM saas.opportunity_documents\n    AS document\n\nJOIN target_analyses AS target\n    ON target.opportunity_analysis_id =\n       document.opportunity_analysis_id\n\nGROUP BY\n    document.organization_id,\n    document.opportunity_analysis_id,\n    document.process_id,\n    document.process_reference\n\nORDER BY\n    document.process_reference;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.opportunity_analysis_ids_json\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1472,
+        224
+      ],
+      "id": "0e08be29-72d4-4fb9-a4a1-3cdb8f50869a",
+      "name": "Resumir matriz documental WF-013",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "requested_by_user_id"
+            },
+            {
+              "name": "process_id"
+            },
+            {
+              "name": "processing_mode"
+            },
+            {
+              "name": "orchestration_execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        160,
+        336
+      ],
+      "id": "c0000000-0000-4000-8000-013000000001",
+      "name": "Entrada desde WF-019"
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('Configurar procesamiento WF-013').first().json; return [{ json: { ...config, workflow_code: 'WF-013', workflow_status: 'success', completion_reason: 'no_eligible_opportunities', finished_at: new Date().toISOString() } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        848,
+        176
+      ],
+      "id": "13000000-0000-4000-8000-000000000013",
+      "name": "Finalizar sin oportunidades WF-013"
+    }
+  ],
+  "connections": {
+    "Inicio Manual WF-013": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar documentos SECOP WF-013": {
+      "main": [
+        [
+          {
+            "node": "Clasificar metadatos documentales WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configurar procesamiento WF-013": {
+      "main": [
+        [
+          {
+            "node": "Seleccionar oportunidades objetivo WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seleccionar oportunidades objetivo WF-013": {
+      "main": [
+        [
+          {
+            "node": "¿Hay oportunidades objetivo WF-013?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay oportunidades objetivo WF-013?": {
+      "main": [
+        [
+          {
+            "node": "Consultar documentos SECOP WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalizar sin oportunidades WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar metadatos documentales WF-013": {
+      "main": [
+        [
+          {
+            "node": "¿Documento relevante y descargable WF-013?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Documento relevante y descargable WF-013?": {
+      "main": [
+        [
+          {
+            "node": "Preparar descarga documental WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar documento secundario WF-",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar descarga documental WF-013": {
+      "main": [
+        [
+          {
+            "node": "Procesar descargas una a una WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar descargas una a una WF-013": {
+      "main": [
+        [
+          {
+            "node": "Preparar resumen documental WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Descargar documento SECOP WF-013",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Combinar contexto y archivo descargado WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar documento SECOP WF-013": {
+      "main": [
+        [
+          {
+            "node": "Combinar contexto y archivo descargado WF-013",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Combinar contexto y archivo descargado WF-013",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Validar descarga WF-013": {
+      "main": [
+        [
+          {
+            "node": "¿Descarga exitosa WF-013?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combinar contexto y archivo descargado WF-013": {
+      "main": [
+        [
+          {
+            "node": "Validar descarga WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Descarga exitosa WF-013?": {
+      "main": [
+        [
+          {
+            "node": "Calcular hash descarga WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar descarga fallida WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pausa entre descargas WF-013": {
+      "main": [
+        [
+          {
+            "node": "Procesar descargas una a una WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calcular hash descarga WF-013": {
+      "main": [
+        [
+          {
+            "node": "Preparar registro descarga WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar registro descarga WF-013": {
+      "main": [
+        [
+          {
+            "node": "Registrar descarga exitosa WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar descarga exitosa WF-013": {
+      "main": [
+        [
+          {
+            "node": "Pausa entre descargas WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar descarga fallida WF-013": {
+      "main": [
+        [
+          {
+            "node": "Pausa entre descargas WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar documento secundario WF-": {
+      "main": [
+        [
+          {
+            "node": "Registrar documento secundario WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar resumen documental WF-013": {
+      "main": [
+        [
+          {
+            "node": "Resumir matriz documental WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada desde WF-019": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-013",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timezone": "America/Bogota",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "CernoIAProdWF007",
+    "executionTimeout": 1800,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

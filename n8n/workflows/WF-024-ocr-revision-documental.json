@@ -1,0 +1,159 @@
+{
+  "id": "CernoIAProdWF024",
+  "name": "[CernoIA PROD] WF-024 — OCR y revisión documental",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cernoia/wf-024",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -900,
+        0
+      ],
+      "id": "024000000-0000-4000-8000-000000000001",
+      "name": "Webhook seguro CernoIA WF-024",
+      "webhookId": "024000000-0000-4000-8000-000000000101",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CernoIAProdWebhook",
+          "name": "CernoIA Webhook Secret"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        180
+      ],
+      "id": "024000000-0000-4000-8000-000000000002",
+      "name": "Inicio Manual WF-024"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw=$input.first()?.json??{}; const input=raw.body&&typeof raw.body==='object'?raw.body:raw; const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i; for(const field of ['organization_id','organization_document_id']) if(!uuid.test(String(input[field]??''))) throw new Error(field+' no es válido'); return [{json:{organization_id:String(input.organization_id),organization_document_id:String(input.organization_document_id)}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        0
+      ],
+      "id": "02400000-0000-4000-8000-000000000003",
+      "name": "Validar documento WF-024"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://127.0.0.1:4001/api/integrations/documents/' + $json.organization_document_id + '/extract' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ organization_id: $json.organization_id }) }}",
+        "options": {
+          "timeout": 240000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -380,
+        0
+      ],
+      "id": "02400000-0000-4000-8000-000000000004",
+      "name": "Ejecutar OCR privado WF-024",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CernoIAProdWebhook",
+          "name": "CernoIA Webhook Secret"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const failed=Boolean($json.error)||Boolean($json.message&&!$json.document_id); return [{json:{workflow_code:'WF-024',workflow_status:failed?'partial':'success',document_id:$json.document_id??$('Validar documento WF-024').first().json.organization_document_id,review_required:true,detail:failed?String($json.error?.message??$json.message??'requiere revisión'):'extracción preparada para revisión humana',finished_at:new Date().toISOString()}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -120,
+        0
+      ],
+      "id": "02400000-0000-4000-8000-000000000005",
+      "name": "Finalizar OCR WF-024"
+    }
+  ],
+  "connections": {
+    "Webhook seguro CernoIA WF-024": {
+      "main": [
+        [
+          {
+            "node": "Validar documento WF-024",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inicio Manual WF-024": {
+      "main": [
+        [
+          {
+            "node": "Validar documento WF-024",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar documento WF-024": {
+      "main": [
+        [
+          {
+            "node": "Ejecutar OCR privado WF-024",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ejecutar OCR privado WF-024": {
+      "main": [
+        [
+          {
+            "node": "Finalizar OCR WF-024",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalizar OCR WF-024",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Bogota",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "CernoIAProdWF007"
+  },
+  "active": false
+}

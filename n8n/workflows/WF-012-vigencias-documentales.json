@@ -1,0 +1,574 @@
+{
+  "id": "CernoIAProdWF012",
+  "name": "[CernoIA PROD] WF-012 — Vigencias y políticas documentales empresariales",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first()?.json ?? {};\nconst input = raw.body && typeof raw.body === 'object' ? raw.body : raw;\n\nreturn [{\n  json: {\n    ...input,\n  workflow_code: input.workflow_code ?? 'WF-012',\n  source_code: input.source_code ?? 'SECOP_ORGANIZATION_DOCUMENT_VALIDITY',\n  processing_mode: input.processing_mode ?? 'all',\n  max_documents: input.max_documents ?? 10,\n  calculation_version: input.calculation_version ?? 1,\n  lock_minutes: input.lock_minutes ?? 30,\n  stale_lock_minutes: input.stale_lock_minutes ?? 45,\n    n8n_execution_id: String($execution.id ?? ''),\n    trigger_type: String($execution.mode ?? 'manual'),\n    configured_at: new Date().toISOString(),\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "7765d118-d6bf-48f0-baf3-c958ed0aa8b2",
+      "name": "Configurar procesamiento WF-012"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.sync_cursors\n(\n    source_code,\n    status,\n\n    active_execution_id,\n    lock_acquired_at,\n    lock_expires_at,\n\n    error_message,\n    metadata,\n\n    created_at,\n    updated_at\n)\n\nVALUES\n(\n    $1::TEXT,\n    'idle',\n\n    NULL,\n    NULL,\n    NULL,\n\n    NULL,\n\n    jsonb_build_object(\n        'workflow_code',\n        'WF-012',\n\n        'calculation_version',\n        1,\n\n        'initialized_at',\n        NOW()\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT\n(\n    source_code\n)\n\nDO UPDATE\n\nSET\n    metadata =\n        COALESCE(\n            ops.sync_cursors.metadata,\n            '{}'::JSONB\n        )\n        ||\n        jsonb_build_object(\n            'workflow_code',\n            'WF-012',\n\n            'calculation_version',\n            1,\n\n            'last_initialized_at',\n            NOW()\n        ),\n\n    updated_at =\n        NOW()\n\nRETURNING\n    source_code,\n    status,\n    active_execution_id,\n    lock_acquired_at,\n    lock_expires_at,\n    metadata,\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-012\")\n      .first()\n      .json\n      .source_code\n  )\n]\n  }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        416,
+        0
+      ],
+      "id": "596a5429-a300-47ff-ad55-e87936f982e8",
+      "name": "Inicializar cursor WF-012",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH recovered_cursor AS (\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'error',\n\n        active_execution_id =\n            NULL,\n\n        lock_acquired_at =\n            NULL,\n\n        lock_expires_at =\n            NULL,\n\n        error_message =\n            'Bloqueo vencido recuperado automáticamente por WF-012.',\n\n        metadata =\n            (\n                COALESCE(\n                    cursor.metadata,\n                    '{}'::JSONB\n                )\n                - 'active_workflow'\n                - 'active_execution_id'\n            )\n            ||\n            jsonb_build_object(\n                'stale_lock_recovered',\n                TRUE,\n\n                'stale_lock_recovered_at',\n                NOW(),\n\n                'stale_lock_recovered_by',\n                'WF-012'\n            ),\n\n        updated_at =\n            NOW()\n\n    WHERE cursor.source_code =\n          $1::TEXT\n\n      AND cursor.active_execution_id\n          IS NOT NULL\n\n      AND (\n          cursor.lock_expires_at <\n              NOW()\n\n          OR\n\n          (\n              cursor.lock_expires_at\n                  IS NULL\n\n              AND cursor.lock_acquired_at <\n                  NOW()\n                  -\n                  make_interval(\n                      mins =>\n                          $2::INTEGER\n                  )\n          )\n      )\n\n    RETURNING\n        cursor.source_code\n)\n\nSELECT\n    EXISTS (\n        SELECT 1\n        FROM recovered_cursor\n    )\n        AS stale_lock_recovered,\n\n    cursor.source_code,\n    cursor.status\n        AS cursor_status,\n\n    cursor.active_execution_id,\n    cursor.lock_acquired_at,\n    cursor.lock_expires_at,\n    cursor.error_message,\n    cursor.updated_at\n\nFROM ops.sync_cursors\n    AS cursor\n\nWHERE cursor.source_code =\n      $1::TEXT\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-012\")\n      .first()\n      .json\n      .source_code\n  ),\n  String(\n    $(\"Configurar procesamiento WF-012\")\n      .first()\n      .json\n      .stale_lock_minutes\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        624,
+        0
+      ],
+      "id": "33e4b7c8-e2e7-473c-aba6-93cc52c73f71",
+      "name": "Recuperar bloqueo vencido WF-012",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH acquired_cursor AS (\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'running',\n\n        active_execution_id =\n            $2::TEXT,\n\n        lock_acquired_at =\n            NOW(),\n\n        lock_expires_at =\n            NOW()\n            +\n            make_interval(\n                mins =>\n                    $3::INTEGER\n            ),\n\n        error_message =\n            NULL,\n\n        metadata =\n            COALESCE(\n                cursor.metadata,\n                '{}'::JSONB\n            )\n            ||\n            jsonb_build_object(\n                'active_workflow',\n                'WF-012',\n\n                'active_execution_id',\n                $2::TEXT,\n\n                'active_execution_started_at',\n                NOW(),\n\n                'calculation_version',\n                1\n            ),\n\n        updated_at =\n            NOW()\n\n    WHERE cursor.source_code =\n          $1::TEXT\n\n      AND (\n          cursor.active_execution_id\n              IS NULL\n\n          OR\n\n          cursor.lock_expires_at <\n              NOW()\n      )\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at\n)\n\nSELECT\n    EXISTS (\n        SELECT 1\n        FROM acquired_cursor\n    )\n        AS lock_acquired,\n\n    COALESCE(\n        (\n            SELECT acquired.status\n            FROM acquired_cursor\n                AS acquired\n            LIMIT 1\n        ),\n        cursor.status\n    )\n        AS cursor_status,\n\n    COALESCE(\n        (\n            SELECT acquired.active_execution_id\n            FROM acquired_cursor\n                AS acquired\n            LIMIT 1\n        ),\n        cursor.active_execution_id\n    )\n        AS active_execution_id,\n\n    COALESCE(\n        (\n            SELECT acquired.lock_acquired_at\n            FROM acquired_cursor\n                AS acquired\n            LIMIT 1\n        ),\n        cursor.lock_acquired_at\n    )\n        AS lock_acquired_at,\n\n    COALESCE(\n        (\n            SELECT acquired.lock_expires_at\n            FROM acquired_cursor\n                AS acquired\n            LIMIT 1\n        ),\n        cursor.lock_expires_at\n    )\n        AS lock_expires_at\n\nFROM ops.sync_cursors\n    AS cursor\n\nWHERE cursor.source_code =\n      $1::TEXT\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-012\")\n      .first()\n      .json\n      .source_code\n  ),\n  String(\n    $execution.id ?? \"\"\n  ),\n  String(\n    $(\"Configurar procesamiento WF-012\")\n      .first()\n      .json\n      .lock_minutes\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        832,
+        0
+      ],
+      "id": "9b8bddee-b46c-4268-9763-20f29dce5008",
+      "name": "Adquirir bloqueo WF-012",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs\n(\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n\n    status,\n    started_at,\n\n    completion_reason,\n\n    metadata,\n\n    created_at,\n    updated_at\n)\n\nVALUES\n(\n    $1::TEXT,\n    $2::TEXT,\n    $3::TEXT,\n    $4::TEXT,\n\n    'running',\n    NOW(),\n\n    NULL,\n\n    jsonb_build_object(\n        'processing_mode',\n        $5::TEXT,\n\n        'max_documents',\n        $6::INTEGER,\n\n        'calculation_version',\n        1,\n\n        'started_by',\n        'WF-012'\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT\n(\n    n8n_execution_id\n)\n\nDO UPDATE\n\nSET\n    workflow_code =\n        EXCLUDED.workflow_code,\n\n    source_code =\n        EXCLUDED.source_code,\n\n    trigger_type =\n        EXCLUDED.trigger_type,\n\n    status =\n        'running',\n\n    started_at =\n        NOW(),\n\n    finished_at =\n        NULL,\n\n    completion_reason =\n        NULL,\n\n    error_node =\n        NULL,\n\n    error_message =\n        NULL,\n\n    error_details =\n        NULL,\n\n    metadata =\n        COALESCE(\n            ops.workflow_runs.metadata,\n            '{}'::JSONB\n        )\n        ||\n        EXCLUDED.metadata,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    id,\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-012\")\n      .first()\n      .json\n      .workflow_code\n      ?? \"WF-012\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-012\")\n      .first()\n      .json\n      .source_code\n      ?? \"SECOP_ORGANIZATION_DOCUMENT_VALIDITY\"\n  ),\n\n  String(\n    $execution.id\n    ?? \"\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-012\")\n      .first()\n      .json\n      .trigger_type\n      ?? \"manual\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-012\")\n      .first()\n      .json\n      .processing_mode\n      ?? \"all\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-012\")\n      .first()\n      .json\n      .max_documents\n      ?? 10\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        208,
+        -256
+      ],
+      "id": "f2722c6e-5d8f-4345-91a6-c7b12096131c",
+      "name": "Registrar inicio WF-012",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH document_evaluation AS (\n    SELECT\n        document.id\n            AS document_id,\n\n        document.organization_id,\n        document.capability_profile_id,\n\n        document.document_type,\n        document.document_name,\n        document.document_status,\n\n        document.issue_date,\n        document.policy_validity_days,\n        document.alert_days_before,\n\n        document.renewal_due_date\n            AS stored_renewal_due_date,\n\n        document.expiration_date\n            AS stored_expiration_date,\n\n        document.alert_due_date\n            AS stored_alert_due_date,\n\n        document.renewal_status\n            AS stored_renewal_status,\n\n        (\n            document.issue_date\n            +\n            document.policy_validity_days\n        )::DATE\n            AS expected_renewal_due_date,\n\n        (\n            document.issue_date\n            +\n            document.policy_validity_days\n            + 1\n        )::DATE\n            AS expected_expiration_date,\n\n        (\n            document.issue_date\n            +\n            document.policy_validity_days\n            -\n            GREATEST(\n                COALESCE(\n                    document.alert_days_before,\n                    0\n                ),\n                0\n            )\n        )::DATE\n            AS expected_alert_due_date,\n\n        CASE\n            WHEN CURRENT_DATE >=\n                 (\n                     document.issue_date\n                     +\n                     document.policy_validity_days\n                     + 1\n                 )::DATE\n\n                THEN 'expired'\n\n            WHEN CURRENT_DATE >=\n                 (\n                     document.issue_date\n                     +\n                     document.policy_validity_days\n                     -\n                     GREATEST(\n                         COALESCE(\n                             document.alert_days_before,\n                             0\n                         ),\n                         0\n                     )\n                 )::DATE\n\n                THEN 'expiring'\n\n            ELSE 'current'\n        END\n            AS expected_renewal_status\n\n    FROM saas.organization_documents\n        AS document\n\n    WHERE document.document_status IN (\n        'uploaded',\n        'active'\n    )\n\n      AND document.replaced_by_document_id\n          IS NULL\n\n      AND document.issue_date\n          IS NOT NULL\n\n      AND document.policy_validity_days\n          IS NOT NULL\n\n      AND document.policy_validity_days > 0\n),\n\npending_documents AS (\n    SELECT\n        evaluation.*\n\n    FROM document_evaluation\n        AS evaluation\n\n    WHERE evaluation.stored_renewal_due_date\n          IS DISTINCT FROM\n          evaluation.expected_renewal_due_date\n\n       OR evaluation.stored_expiration_date\n          IS DISTINCT FROM\n          evaluation.expected_expiration_date\n\n       OR evaluation.stored_alert_due_date\n          IS DISTINCT FROM\n          evaluation.expected_alert_due_date\n\n       OR evaluation.stored_renewal_status\n          IS DISTINCT FROM\n          evaluation.expected_renewal_status\n\n    ORDER BY\n        CASE\n            WHEN evaluation.expected_renewal_status =\n                 'expired'\n                THEN 1\n\n            WHEN evaluation.expected_renewal_status =\n                 'expiring'\n                THEN 2\n\n            ELSE 3\n        END,\n\n        evaluation.expected_renewal_due_date ASC,\n\n        evaluation.document_id ASC\n\n    LIMIT $1::INTEGER\n)\n\nSELECT\n    TRUE\n        AS has_document,\n\n    'pending_recalculation'\n        AS claim_reason,\n\n    pending.document_id,\n    pending.organization_id,\n    pending.capability_profile_id,\n\n    pending.document_type,\n    pending.document_name,\n    pending.document_status,\n\n    pending.issue_date,\n    pending.policy_validity_days,\n    pending.alert_days_before,\n\n    pending.stored_renewal_due_date,\n    pending.expected_renewal_due_date,\n\n    pending.stored_expiration_date,\n    pending.expected_expiration_date,\n\n    pending.stored_alert_due_date,\n    pending.expected_alert_due_date,\n\n    pending.stored_renewal_status,\n    pending.expected_renewal_status\n\nFROM pending_documents\n    AS pending\n\nUNION ALL\n\nSELECT\n    FALSE,\n    'no_documents',\n\n    NULL::UUID,\n    NULL::UUID,\n    NULL::UUID,\n\n    NULL::TEXT,\n    NULL::TEXT,\n    NULL::TEXT,\n\n    NULL::DATE,\n    NULL::INTEGER,\n    NULL::INTEGER,\n\n    NULL::DATE,\n    NULL::DATE,\n\n    NULL::DATE,\n    NULL::DATE,\n\n    NULL::DATE,\n    NULL::DATE,\n\n    NULL::TEXT,\n    NULL::TEXT\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM pending_documents\n);",
+        "options": {
+          "queryReplacement": "={{[  String(    $(\"Configurar procesamiento WF-012\")      .first()      .json      .max_documents  )]}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        416,
+        -256
+      ],
+      "id": "5d42dda6-304f-4a93-86be-ce111519eb25",
+      "name": "Tomar documentos pendientes WF-012",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2cdc89a8-080a-470a-ae65-4879157dc107",
+              "leftValue": "={{ $json.has_document_boolean }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        832,
+        -256
+      ],
+      "id": "c57e36db-ec8a-4dab-96b5-4b5c0d56f171",
+      "name": "¿Hay documentos para recalcular WF-012?"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1040,
+        -288
+      ],
+      "id": "9e81c308-dc4b-4def-8871-99705509633d",
+      "name": "Procesar documentos uno a uno WF-012"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS (\n    SELECT\n        NULLIF(\n            BTRIM(\n                $1::TEXT\n            ),\n            ''\n        )::UUID\n            AS document_id,\n\n        NULLIF(\n            BTRIM(\n                $2::TEXT\n            ),\n            ''\n        )\n            AS n8n_execution_id\n),\n\nvalid_parameters AS (\n    SELECT\n        parameters.document_id,\n        parameters.n8n_execution_id\n\n    FROM parameters\n\n    WHERE parameters.document_id\n          IS NOT NULL\n),\n\ncalculated_document AS (\n    SELECT\n        result.*\n\n    FROM valid_parameters\n        AS parameters\n\n    CROSS JOIN LATERAL\n        saas.recalculate_organization_document_validity_v1\n        (\n            parameters.document_id,\n            parameters.n8n_execution_id,\n            TRUE\n        )\n        AS result\n)\n\nSELECT\n    calculated.document_id,\n    calculated.organization_id,\n    calculated.document_type,\n\n    calculated.calculation_status,\n    calculated.changed,\n    calculated.changes_applied,\n\n    calculated.previous_renewal_due_date,\n    calculated.calculated_renewal_due_date,\n\n    calculated.previous_expiration_date,\n    calculated.calculated_expiration_date,\n\n    calculated.previous_alert_due_date,\n    calculated.calculated_alert_due_date,\n\n    calculated.previous_renewal_status,\n    calculated.calculated_renewal_status,\n\n    calculated.validity_history_id\n\nFROM calculated_document\n    AS calculated\n\nUNION ALL\n\nSELECT\n    NULL::UUID\n        AS document_id,\n\n    NULL::UUID\n        AS organization_id,\n\n    NULL::TEXT\n        AS document_type,\n\n    'skipped_no_document'::TEXT\n        AS calculation_status,\n\n    FALSE::BOOLEAN\n        AS changed,\n\n    FALSE::BOOLEAN\n        AS changes_applied,\n\n    NULL::DATE\n        AS previous_renewal_due_date,\n\n    NULL::DATE\n        AS calculated_renewal_due_date,\n\n    NULL::DATE\n        AS previous_expiration_date,\n\n    NULL::DATE\n        AS calculated_expiration_date,\n\n    NULL::DATE\n        AS previous_alert_due_date,\n\n    NULL::DATE\n        AS calculated_alert_due_date,\n\n    NULL::TEXT\n        AS previous_renewal_status,\n\n    NULL::TEXT\n        AS calculated_renewal_status,\n\n    NULL::UUID\n        AS validity_history_id\n\nFROM parameters\n\nWHERE parameters.document_id\n      IS NULL;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $json.document_id ?? \"\"\n  ),\n  String(\n    $execution.id ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1248,
+        -192
+      ],
+      "id": "2a3df242-7293-4cd9-b3d0-630fa67b7b65",
+      "name": "Recalcular vigencia WF-012",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH execution_metrics AS (\n    SELECT\n        COUNT(*)::INTEGER\n            AS evaluated_documents,\n\n        COUNT(*) FILTER (\n            WHERE history.calculation_status =\n                  'updated'\n        )::INTEGER\n            AS updated_documents,\n\n        COUNT(*) FILTER (\n            WHERE history.calculation_status =\n                  'unchanged'\n        )::INTEGER\n            AS unchanged_documents,\n\n        COUNT(*) FILTER (\n            WHERE history.calculation_status =\n                  'skipped'\n        )::INTEGER\n            AS skipped_documents,\n\n        COUNT(*) FILTER (\n            WHERE history.calculation_status =\n                  'failed'\n        )::INTEGER\n            AS failed_documents\n\n    FROM saas.organization_document_validity_history\n        AS history\n\n    WHERE history.workflow_code =\n          'WF-012'\n\n      AND history.n8n_execution_id =\n          $1::TEXT\n),\n\nclosed_run AS (\n    UPDATE ops.workflow_runs\n        AS run\n\n    SET\n        status =\n            'success',\n\n        finished_at =\n            NOW(),\n\n        completion_reason =\n            CASE\n                WHEN metrics.evaluated_documents = 0\n                    THEN 'no_documents'\n\n                ELSE 'completed'\n            END,\n\n        batches_processed =\n            CASE\n                WHEN metrics.evaluated_documents > 0\n                    THEN 1\n\n                ELSE 0\n            END,\n\n        records_read =\n            metrics.evaluated_documents,\n\n        records_written =\n            metrics.updated_documents,\n\n        metadata =\n            COALESCE(\n                run.metadata,\n                '{}'::JSONB\n            )\n            ||\n            jsonb_build_object(\n                'evaluated_documents',\n                metrics.evaluated_documents,\n\n                'updated_documents',\n                metrics.updated_documents,\n\n                'unchanged_documents',\n                metrics.unchanged_documents,\n\n                'skipped_documents',\n                metrics.skipped_documents,\n\n                'failed_documents',\n                metrics.failed_documents,\n\n                'finished_by',\n                'WF-012',\n\n                'finished_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM execution_metrics\n        AS metrics\n\n    WHERE run.workflow_code =\n          'WF-012'\n\n      AND run.n8n_execution_id =\n          $1::TEXT\n\n    RETURNING\n        run.id,\n        run.status,\n        run.completion_reason,\n        run.finished_at,\n        run.records_read,\n        run.records_written\n)\n\nSELECT\n    metrics.evaluated_documents,\n    metrics.updated_documents,\n    metrics.unchanged_documents,\n    metrics.skipped_documents,\n    metrics.failed_documents,\n\n    run.id\n        AS workflow_run_id,\n\n    run.status\n        AS workflow_run_status,\n\n    run.completion_reason,\n    run.finished_at,\n\n    TRUE\n        AS execution_finalized\n\nFROM execution_metrics\n    AS metrics\n\nLEFT JOIN closed_run\n    AS run\n\n    ON TRUE;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $execution.id ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1040,
+        -464
+      ],
+      "id": "5ce760f3-694f-474a-9e97-cc613e4ff991",
+      "name": "Finalizar ejecución WF-012",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH released_cursor AS (\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'success',\n\n        active_execution_id =\n            NULL,\n\n        lock_acquired_at =\n            NULL,\n\n        lock_expires_at =\n            NULL,\n\n        error_message =\n            NULL,\n\n        metadata =\n            (\n                COALESCE(\n                    cursor.metadata,\n                    '{}'::JSONB\n                )\n                - 'active_workflow'\n                - 'active_execution_id'\n                - 'active_execution_started_at'\n            )\n            ||\n            jsonb_build_object(\n                'last_successful_workflow',\n                'WF-012',\n\n                'last_successful_execution_id',\n                $2::TEXT,\n\n                'last_successful_finished_at',\n                NOW(),\n\n                'lock_released',\n                TRUE\n            ),\n\n        updated_at =\n            NOW()\n\n    WHERE cursor.source_code =\n          $1::TEXT\n\n      AND cursor.active_execution_id::TEXT =\n          $2::TEXT\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n        cursor.error_message,\n        cursor.updated_at\n)\n\nSELECT\n    TRUE\n        AS lock_released,\n\n    released.source_code,\n\n    released.status\n        AS cursor_status,\n\n    released.active_execution_id,\n    released.lock_acquired_at,\n    released.lock_expires_at,\n    released.error_message,\n    released.updated_at\n\nFROM released_cursor\n    AS released\n\nUNION ALL\n\nSELECT\n    FALSE\n        AS lock_released,\n\n    cursor.source_code,\n\n    cursor.status\n        AS cursor_status,\n\n    cursor.active_execution_id,\n    cursor.lock_acquired_at,\n    cursor.lock_expires_at,\n    cursor.error_message,\n    cursor.updated_at\n\nFROM ops.sync_cursors\n    AS cursor\n\nWHERE cursor.source_code =\n      $1::TEXT\n\n  AND NOT EXISTS (\n      SELECT 1\n      FROM released_cursor\n  )\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-012\")\n      .first()\n      .json\n      .source_code\n  ),\n\n  String(\n    $execution.id ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1248,
+        -464
+      ],
+      "id": "181b6b4f-984b-40bc-b1a5-cf4d4554db8a",
+      "name": "Liberar bloqueo WF-012",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const lockResult =\n  $input.first()?.json ?? {};\n\nconst configuration =\n  $(\"Configurar procesamiento WF-012\")\n    .first()\n    .json;\n\nreturn [\n  {\n    json: {\n      workflow_code:\n        configuration.workflow_code,\n\n      source_code:\n        configuration.source_code,\n\n      execution_status:\n        'omitted',\n\n      completion_reason:\n        'lock_not_acquired',\n\n      execution_omitted:\n        true,\n\n      attempted_execution_id:\n        String(\n          $execution.id ?? ''\n        ),\n\n      active_execution_id:\n        lockResult.active_execution_id\n        ?? null,\n\n      cursor_status:\n        lockResult.cursor_status\n        ?? null,\n\n      lock_acquired_at:\n        lockResult.lock_acquired_at\n        ?? null,\n\n      lock_expires_at:\n        lockResult.lock_expires_at\n        ?? null,\n\n      message:\n        'WF-012 no se ejecutó porque otra ejecución conserva un bloqueo activo.',\n\n      finished_at:\n        new Date().toISOString(),\n    },\n  },\n];;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        -112
+      ],
+      "id": "527ea6f5-d725-474e-aec4-89912c231082",
+      "name": "Omitir ejecución por bloqueo WF-012"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "99f71c9d-590a-4fc0-80b0-ad2e69586642",
+              "leftValue": "={{ $json.lock_acquired_boolean }}",
+              "rightValue": "LOCK_ACQUIRED",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        0,
+        -160
+      ],
+      "id": "e49b50d3-7528-4e9f-b7d8-3cac197f39a2",
+      "name": "¿Bloqueo adquirido WF-012?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -224,
+        -112
+      ],
+      "id": "3e235322-a650-4eb0-b332-bc113bb787fb",
+      "name": "Inicio Manual WF-012"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input =\n  $input.first()?.json ?? {};\n\nconst rawLockValue =\n  input.lock_acquired;\n\nconst lockAcquired =\n  rawLockValue === true\n  || rawLockValue === 1\n  || String(\n    rawLockValue ?? ''\n  )\n    .trim()\n    .toLowerCase() === 'true'\n  || String(\n    rawLockValue ?? ''\n  )\n    .trim() === '1';\n\nreturn [\n  {\n    json: {\n      ...input,\n\n      lock_acquired_raw:\n        rawLockValue ?? null,\n\n      lock_acquired_boolean:\n        lockAcquired,\n\n      lock_acquired_flag:\n        lockAcquired ? 1 : 0,\n\n      lock_route:\n        lockAcquired\n          ? 'LOCK_ACQUIRED'\n          : 'LOCK_NOT_ACQUIRED',\n\n      normalized_by:\n        'WF-012',\n\n      normalized_at:\n        new Date().toISOString(),\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ],
+      "id": "1faacf1d-a9d3-48b4-be26-0b2cec04d33a",
+      "name": "Normalizar resultado de bloqueo WF-012"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items =\n  $input.all();\n\nreturn items.map((item) => {\n  const input =\n    item.json ?? {};\n\n  const rawHasDocument =\n    input.has_document;\n\n  const hasDocument =\n    rawHasDocument === true\n    || rawHasDocument === 1\n    || String(\n      rawHasDocument ?? ''\n    )\n      .trim()\n      .toLowerCase() === 'true'\n    || String(\n      rawHasDocument ?? ''\n    )\n      .trim() === '1';\n\n  return {\n    json: {\n      ...input,\n\n      has_document_raw:\n        rawHasDocument ?? null,\n\n      has_document_boolean:\n        hasDocument,\n\n      document_route:\n        hasDocument\n          ? 'DOCUMENT_AVAILABLE'\n          : 'NO_DOCUMENTS',\n\n      normalized_by:\n        'WF-012',\n\n      normalized_at:\n        new Date().toISOString(),\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        -256
+      ],
+      "id": "189f88ea-a664-4e5b-a390-552c42a7aee9",
+      "name": "Normalizar resultado de documentos WF-012"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "requested_by_user_id"
+            },
+            {
+              "name": "process_id"
+            },
+            {
+              "name": "processing_mode"
+            },
+            {
+              "name": "orchestration_execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -208,
+        -256
+      ],
+      "id": "b37d9a5b-4f40-479f-b721-44ea68a5e7ae",
+      "name": "When Executed by Another Workflow"
+    }
+  ],
+  "connections": {
+    "Configurar procesamiento WF-012": {
+      "main": [
+        [
+          {
+            "node": "Inicializar cursor WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inicializar cursor WF-012": {
+      "main": [
+        [
+          {
+            "node": "Recuperar bloqueo vencido WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recuperar bloqueo vencido WF-012": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adquirir bloqueo WF-012": {
+      "main": [
+        [
+          {
+            "node": "Normalizar resultado de bloqueo WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar inicio WF-012": {
+      "main": [
+        [
+          {
+            "node": "Tomar documentos pendientes WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tomar documentos pendientes WF-012": {
+      "main": [
+        [
+          {
+            "node": "Normalizar resultado de documentos WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay documentos para recalcular WF-012?": {
+      "main": [
+        [
+          {
+            "node": "Procesar documentos uno a uno WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalizar ejecución WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar documentos uno a uno WF-012": {
+      "main": [
+        [
+          {
+            "node": "Finalizar ejecución WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Recalcular vigencia WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recalcular vigencia WF-012": {
+      "main": [
+        [
+          {
+            "node": "Procesar documentos uno a uno WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalizar ejecución WF-012": {
+      "main": [
+        [
+          {
+            "node": "Liberar bloqueo WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Bloqueo adquirido WF-012?": {
+      "main": [
+        [
+          {
+            "node": "Registrar inicio WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Omitir ejecución por bloqueo WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inicio Manual WF-012": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar resultado de bloqueo WF-012": {
+      "main": [
+        [
+          {
+            "node": "¿Bloqueo adquirido WF-012?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar resultado de documentos WF-012": {
+      "main": [
+        [
+          {
+            "node": "¿Hay documentos para recalcular WF-012?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-012",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "CernoIAProdWF007",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Bogota",
+    "executionTimeout": 1800,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

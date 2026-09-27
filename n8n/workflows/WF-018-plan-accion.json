@@ -1,0 +1,687 @@
+{
+  "id": "CernoIAProdWF018",
+  "name": "[CernoIA PROD] WF-018 - Faltantes vigencias y plan de acción",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "1325bbdf-96d5-48a2-826d-834262f38763",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first()?.json ?? {};\nconst input = raw.body && typeof raw.body === 'object' ? raw.body : raw;\n\nreturn [{\n  json: {\n    ...input,\n  workflow_code: input.workflow_code ?? 'WF-018',\n  source_code: input.source_code ?? 'SECOP_OPPORTUNITY_ACTION_PLAN_GENERATION',\n  processing_mode: input.processing_mode ?? 'all',\n  max_evaluations: input.max_evaluations ?? 10,\n  plan_version: input.plan_version ?? 1,\n  generation_method: input.generation_method ?? 'deterministic_v1',\n  lock_minutes: input.lock_minutes ?? 30,\n  stale_lock_minutes: input.stale_lock_minutes ?? 45,\n    n8n_execution_id: String($execution.id ?? ''),\n    trigger_type: String($execution.mode ?? 'manual'),\n    configured_at: new Date().toISOString(),\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "51d8725e-265a-4a0a-8174-c6a4b87805c5",
+      "name": "Configurar procesamiento WF-018"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.sync_cursors\n(\n    source_code,\n    status,\n\n    active_execution_id,\n    lock_acquired_at,\n    lock_expires_at,\n\n    error_message,\n\n    metadata,\n\n    updated_at\n)\n\nVALUES\n(\n    $1::TEXT,\n\n    'idle',\n\n    NULL,\n    NULL,\n    NULL,\n\n    NULL,\n\n    jsonb_build_object(\n        'workflow_code',\n        'WF-018',\n\n        'source_code',\n        $1::TEXT,\n\n        'initialized_by',\n        'WF-018',\n\n        'initialized_at',\n        NOW()\n    ),\n\n    NOW()\n)\n\nON CONFLICT\n(\n    source_code\n)\n\nDO UPDATE\n\nSET\n    metadata =\n        COALESCE(\n            ops.sync_cursors.metadata,\n            '{}'::JSONB\n        )\n        ||\n        jsonb_build_object(\n            'workflow_code',\n            'WF-018',\n\n            'last_initialized_at',\n            NOW(),\n\n            'last_initialized_by',\n            'WF-018'\n        ),\n\n    updated_at =\n        NOW()\n\nRETURNING\n    source_code,\n    status,\n\n    active_execution_id,\n\n    lock_acquired_at,\n    lock_expires_at,\n\n    error_message,\n\n    metadata,\n\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-018\")\n      .first()\n      .json\n      .source_code\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        -224
+      ],
+      "id": "0ef73a48-4bd3-44eb-95ed-9fb17387d08a",
+      "name": "Inicializar cursor WF-018",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH stale_cursor AS\n(\n    SELECT\n        cursor.source_code,\n        cursor.active_execution_id\n\n    FROM ops.sync_cursors\n        AS cursor\n\n    WHERE cursor.source_code =\n          $1::TEXT\n\n      AND cursor.active_execution_id\n          IS NOT NULL\n\n      AND\n      (\n          cursor.lock_expires_at\n              IS NULL\n\n          OR\n\n          cursor.lock_expires_at\n              < NOW()\n\n          OR\n\n          cursor.lock_acquired_at\n              <\n              NOW()\n              -\n              (\n                  $2::INTEGER\n                  * INTERVAL '1 minute'\n              )\n      )\n\n    LIMIT 1\n),\n\nclosed_run AS\n(\n    UPDATE ops.workflow_runs\n        AS run\n\n    SET\n        status =\n            'failed',\n\n        finished_at =\n            NOW(),\n\n        completion_reason =\n            'stale_lock_recovery',\n\n        error_message =\n            'WF-018 recuperó un bloqueo vencido.',\n\n        error_details =\n            COALESCE(\n                run.error_details,\n                '{}'::JSONB\n            )\n            ||\n            jsonb_build_object(\n                'recovery_type',\n                'stale_lock',\n\n                'recovered_by',\n                'WF-018',\n\n                'recovered_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM stale_cursor\n        AS stale\n\n    WHERE run.workflow_code =\n          'WF-018'\n\n      AND run.n8n_execution_id =\n          stale.active_execution_id::TEXT\n\n      AND run.status =\n          'running'\n\n    RETURNING\n        run.id\n),\n\nrecovered_cursor AS\n(\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'error',\n\n        active_execution_id =\n            NULL,\n\n        lock_acquired_at =\n            NULL,\n\n        lock_expires_at =\n            NULL,\n\n        error_message =\n            'Stale lock recovered by WF-018',\n\n        metadata =\n            (\n                COALESCE(\n                    cursor.metadata,\n                    '{}'::JSONB\n                )\n                - 'active_workflow'\n                - 'active_execution_id'\n                - 'active_execution_started_at'\n            )\n            ||\n            jsonb_build_object(\n                'stale_lock_recovered',\n                TRUE,\n\n                'stale_lock_recovered_at',\n                NOW(),\n\n                'stale_lock_recovered_by',\n                'WF-018'\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM stale_cursor\n        AS stale\n\n    WHERE cursor.source_code =\n          stale.source_code\n\n      AND cursor.active_execution_id =\n          stale.active_execution_id\n\n    RETURNING\n        cursor.source_code\n)\n\nSELECT\n    EXISTS (\n        SELECT 1\n        FROM stale_cursor\n    )\n        AS stale_lock_found,\n\n    EXISTS (\n        SELECT 1\n        FROM closed_run\n    )\n        AS workflow_run_closed,\n\n    EXISTS (\n        SELECT 1\n        FROM recovered_cursor\n    )\n        AS lock_recovered,\n\n    cursor.source_code,\n\n    cursor.status\n        AS cursor_status,\n\n    cursor.active_execution_id,\n\n    cursor.lock_acquired_at,\n\n    cursor.lock_expires_at,\n\n    cursor.error_message,\n\n    cursor.updated_at\n\nFROM ops.sync_cursors\n    AS cursor\n\nWHERE cursor.source_code =\n      $1::TEXT;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-018\")\n      .first()\n      .json\n      .source_code\n  ),\n\n  Number(\n    $(\"Configurar procesamiento WF-018\")\n      .first()\n      .json\n      .stale_lock_minutes\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        208,
+        -224
+      ],
+      "id": "ac636090-17f4-488b-80f8-cdee57be057b",
+      "name": "Recuperar bloqueo vencido WF-018",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH lock_attempt AS\n(\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'running',\n\n        active_execution_id =\n            $2::TEXT,\n\n        lock_acquired_at =\n            NOW(),\n\n        lock_expires_at =\n            NOW()\n            +\n            (\n                $3::INTEGER\n                * INTERVAL '1 minute'\n            ),\n\n        error_message =\n            NULL,\n\n        metadata =\n            COALESCE(\n                cursor.metadata,\n                '{}'::JSONB\n            )\n            ||\n            jsonb_build_object(\n                'active_workflow',\n                'WF-018',\n\n                'active_execution_id',\n                $2::TEXT,\n\n                'active_execution_started_at',\n                NOW(),\n\n                'plan_version',\n                1,\n\n                'generation_method',\n                'deterministic_v1'\n            ),\n\n        updated_at =\n            NOW()\n\n    WHERE cursor.source_code =\n          $1::TEXT\n\n      AND\n      (\n          cursor.active_execution_id\n              IS NULL\n\n          OR\n\n          cursor.lock_expires_at\n              IS NULL\n\n          OR\n\n          cursor.lock_expires_at\n              < NOW()\n\n          OR\n\n          cursor.active_execution_id::TEXT =\n              $2::TEXT\n      )\n\n    RETURNING\n        cursor.source_code,\n\n        cursor.status,\n\n        cursor.active_execution_id,\n\n        cursor.lock_acquired_at,\n\n        cursor.lock_expires_at,\n\n        cursor.error_message,\n\n        cursor.updated_at\n)\n\nSELECT\n    TRUE\n        AS lock_acquired,\n\n    acquired.source_code,\n\n    acquired.status\n        AS cursor_status,\n\n    acquired.active_execution_id,\n\n    acquired.lock_acquired_at,\n\n    acquired.lock_expires_at,\n\n    acquired.error_message,\n\n    acquired.updated_at\n\nFROM lock_attempt\n    AS acquired\n\n\nUNION ALL\n\n\nSELECT\n    FALSE\n        AS lock_acquired,\n\n    cursor.source_code,\n\n    cursor.status\n        AS cursor_status,\n\n    cursor.active_execution_id,\n\n    cursor.lock_acquired_at,\n\n    cursor.lock_expires_at,\n\n    cursor.error_message,\n\n    cursor.updated_at\n\nFROM ops.sync_cursors\n    AS cursor\n\nWHERE cursor.source_code =\n      $1::TEXT\n\n  AND NOT EXISTS\n  (\n      SELECT 1\n      FROM lock_attempt\n  )\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-018\")\n      .first()\n      .json\n      .source_code\n  ),\n\n  String(\n    $execution.id ?? \"\"\n  ),\n\n  Number(\n    $(\"Configurar procesamiento WF-018\")\n      .first()\n      .json\n      .lock_minutes\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        416,
+        -224
+      ],
+      "id": "714fd927-6142-42b7-a76f-4d2cdfd1a8f2",
+      "name": "Adquirir bloqueo WF-018",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input =\n  $input.first()?.json ?? {};\n\nconst rawLockValue =\n  input.lock_acquired;\n\nconst lockAcquired =\n  rawLockValue === true\n  || rawLockValue === 1\n  || String(\n    rawLockValue ?? ''\n  )\n    .trim()\n    .toLowerCase() === 'true'\n  || String(\n    rawLockValue ?? ''\n  )\n    .trim() === '1';\n\nreturn [\n  {\n    json: {\n      ...input,\n\n      lock_acquired_raw:\n        rawLockValue ?? null,\n\n      lock_acquired_boolean:\n        lockAcquired,\n\n      lock_acquired_flag:\n        lockAcquired\n          ? 1\n          : 0,\n\n      lock_route:\n        lockAcquired\n          ? 'LOCK_ACQUIRED'\n          : 'LOCK_NOT_ACQUIRED',\n\n      workflow_code:\n        'WF-018',\n\n      normalized_at:\n        new Date().toISOString(),\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        -224
+      ],
+      "id": "b418778e-6177-4519-a862-21d4ca775a7a",
+      "name": "Normalizar resultado de bloqueo WF-018"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input =\n  $input.first()?.json ?? {};\n\nreturn [\n  {\n    json: {\n      workflow_code:\n        'WF-018',\n\n      workflow_status:\n        'skipped',\n\n      completion_reason:\n        'lock_not_acquired',\n\n      lock_acquired:\n        false,\n\n      active_execution_id:\n        input.active_execution_id\n        ?? null,\n\n      lock_acquired_at:\n        input.lock_acquired_at\n        ?? null,\n\n      lock_expires_at:\n        input.lock_expires_at\n        ?? null,\n\n      message:\n        'WF-018 fue omitido porque existe otra ejecución activa.',\n\n      skipped_at:\n        new Date().toISOString(),\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        -208
+      ],
+      "id": "41e69393-656b-4796-a9e0-e92dd299db29",
+      "name": "Omitir ejecución por bloqueo WF-018"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs\n(\n    workflow_code,\n\n    source_code,\n\n    n8n_execution_id,\n\n    trigger_type,\n\n    status,\n\n    started_at,\n\n    error_details,\n\n    metadata,\n\n    created_at,\n\n    updated_at\n)\n\nVALUES\n(\n    'WF-018',\n\n    'SECOP_OPPORTUNITY_ACTION_PLAN_GENERATION',\n\n    $1::TEXT,\n\n    $2::TEXT,\n\n    'running',\n\n    NOW(),\n\n    '{}'::JSONB,\n\n    jsonb_build_object(\n        'workflow_code',\n        'WF-018',\n\n        'source_code',\n        'SECOP_OPPORTUNITY_ACTION_PLAN_GENERATION',\n\n        'plan_version',\n        1,\n\n        'generation_method',\n        'deterministic_v1',\n\n        'started_by',\n        'WF-018',\n\n        'started_at',\n        NOW()\n    ),\n\n    NOW(),\n\n    NOW()\n)\n\nON CONFLICT\n(\n    n8n_execution_id\n)\n\nDO UPDATE\n\nSET\n    workflow_code =\n        'WF-018',\n\n    source_code =\n        'SECOP_OPPORTUNITY_ACTION_PLAN_GENERATION',\n\n    trigger_type =\n        EXCLUDED.trigger_type,\n\n    status =\n        'running',\n\n    started_at =\n        NOW(),\n\n    finished_at =\n        NULL,\n\n    completion_reason =\n        NULL,\n\n    error_node =\n        NULL,\n\n    error_message =\n        NULL,\n\n    error_details =\n        '{}'::JSONB,\n\n    metadata =\n        COALESCE(\n            ops.workflow_runs.metadata,\n            '{}'::JSONB\n        )\n        ||\n        EXCLUDED.metadata,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    id\n        AS workflow_run_id,\n\n    workflow_code,\n\n    source_code,\n\n    n8n_execution_id,\n\n    status\n        AS workflow_run_status,\n\n    started_at,\n\n    updated_at;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $execution.id ?? \"\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-018\")\n      .first()\n      .json\n      .trigger_type\n      ?? \"manual\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        208,
+        -400
+      ],
+      "id": "0aedd2fa-b718-473c-87bc-fd8a7b35e59d",
+      "name": "Registrar inicio WF-018",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH current_evaluations AS\n(\n    SELECT\n        evaluation.id\n            AS evaluation_id,\n\n        evaluation.organization_id,\n\n        evaluation.opportunity_analysis_id,\n\n        evaluation.matrix_id,\n\n        evaluation.process_reference,\n\n        evaluation.overall_status,\n\n        evaluation.compliance_score,\n\n        evaluation.evaluation_version,\n\n        evaluation.evaluation_method,\n\n        evaluation.updated_at,\n\n        ENCODE(\n            DIGEST(\n                CONVERT_TO(\n                    CONCAT_WS(\n                        '|',\n\n                        evaluation.id::TEXT,\n\n                        COALESCE(\n                            evaluation.updated_at::TEXT,\n                            ''\n                        ),\n\n                        COALESCE(\n                            evaluation.overall_status,\n                            ''\n                        ),\n\n                        COALESCE(\n                            evaluation.compliance_score::TEXT,\n                            ''\n                        ),\n\n                        COALESCE(\n                            (\n                                SELECT\n                                    STRING_AGG(\n                                        TO_JSONB(item)::TEXT,\n                                        '|'\n                                        ORDER BY\n                                            item.id\n                                    )\n\n                                FROM\n                                    saas.opportunity_compliance_evaluation_items\n                                        AS item\n\n                                WHERE item.evaluation_id =\n                                      evaluation.id\n                            ),\n\n                            ''\n                        )\n                    ),\n\n                    'UTF8'\n                ),\n\n                'sha256'\n            ),\n\n            'hex'\n        )\n            AS current_input_hash\n\n    FROM\n        saas.opportunity_compliance_evaluations\n            AS evaluation\n\n    WHERE evaluation.is_current =\n          TRUE\n\n      AND evaluation.evaluation_status =\n          'completed'\n),\n\ncurrent_plans AS\n(\n    SELECT\n        plan.id\n            AS current_plan_id,\n\n        plan.organization_id,\n\n        plan.opportunity_analysis_id,\n\n        plan.evaluation_id\n            AS planned_evaluation_id,\n\n        plan.input_hash_sha256::TEXT\n            AS stored_input_hash,\n\n        plan.generation_status,\n\n        plan.plan_version,\n\n        plan.generation_method,\n\n        plan.updated_at\n            AS plan_updated_at\n\n    FROM\n        saas.opportunity_action_plans\n            AS plan\n\n    WHERE plan.is_current =\n          TRUE\n),\n\ncandidates AS\n(\n    SELECT\n        evaluation.*,\n\n        plan.current_plan_id,\n\n        plan.planned_evaluation_id,\n\n        plan.stored_input_hash,\n\n        plan.generation_status\n            AS current_generation_status,\n\n        plan.plan_version\n            AS current_plan_version,\n\n        plan.generation_method\n            AS current_generation_method,\n\n        plan.plan_updated_at,\n\n        CASE\n\n            WHEN plan.current_plan_id\n                 IS NULL\n                THEN\n                    'NO_PLAN'\n\n            WHEN plan.generation_status\n                 IS DISTINCT FROM\n                 'completed'\n                THEN\n                    'PLAN_NOT_COMPLETED'\n\n            WHEN plan.planned_evaluation_id\n                 IS DISTINCT FROM\n                 evaluation.evaluation_id\n                THEN\n                    'EVALUATION_CHANGED'\n\n            WHEN plan.generation_method\n                 IS DISTINCT FROM\n                 'deterministic_v1'\n                THEN\n                    'METHOD_CHANGED'\n\n            WHEN plan.stored_input_hash\n                 IS DISTINCT FROM\n                 evaluation.current_input_hash\n                THEN\n                    'INPUT_CHANGED'\n\n            ELSE\n                NULL\n\n        END\n            AS claim_reason\n\n    FROM current_evaluations\n        AS evaluation\n\n    LEFT JOIN current_plans\n        AS plan\n\n        ON plan.organization_id =\n           evaluation.organization_id\n\n       AND plan.opportunity_analysis_id =\n           evaluation.opportunity_analysis_id\n),\n\nclaimed AS\n(\n    SELECT\n        *\n\n    FROM candidates\n\n    WHERE claim_reason\n          IS NOT NULL\n\n    ORDER BY\n        updated_at ASC,\n        evaluation_id\n\n    LIMIT $1::INTEGER\n)\n\nSELECT\n    TRUE\n        AS has_evaluation,\n\n    claim_reason,\n\n    evaluation_id,\n\n    organization_id,\n\n    opportunity_analysis_id,\n\n    matrix_id,\n\n    process_reference,\n\n    overall_status,\n\n    compliance_score,\n\n    evaluation_version,\n\n    evaluation_method,\n\n    current_input_hash,\n\n    current_plan_id,\n\n    planned_evaluation_id,\n\n    stored_input_hash,\n\n    current_generation_status,\n\n    current_plan_version,\n\n    current_generation_method,\n\n    updated_at\n        AS evaluation_updated_at,\n\n    plan_updated_at\n\nFROM claimed\n\n\nUNION ALL\n\n\nSELECT\n    FALSE\n        AS has_evaluation,\n\n    'NO_EVALUATIONS'::TEXT\n        AS claim_reason,\n\n    NULL::UUID\n        AS evaluation_id,\n\n    NULL::UUID\n        AS organization_id,\n\n    NULL::UUID\n        AS opportunity_analysis_id,\n\n    NULL::UUID\n        AS matrix_id,\n\n    NULL::TEXT\n        AS process_reference,\n\n    NULL::TEXT\n        AS overall_status,\n\n    NULL::NUMERIC\n        AS compliance_score,\n\n    NULL::INTEGER\n        AS evaluation_version,\n\n    NULL::TEXT\n        AS evaluation_method,\n\n    NULL::TEXT\n        AS current_input_hash,\n\n    NULL::UUID\n        AS current_plan_id,\n\n    NULL::UUID\n        AS planned_evaluation_id,\n\n    NULL::TEXT\n        AS stored_input_hash,\n\n    NULL::TEXT\n        AS current_generation_status,\n\n    NULL::INTEGER\n        AS current_plan_version,\n\n    NULL::TEXT\n        AS current_generation_method,\n\n    NULL::TIMESTAMPTZ\n        AS evaluation_updated_at,\n\n    NULL::TIMESTAMPTZ\n        AS plan_updated_at\n\nWHERE NOT EXISTS\n(\n    SELECT 1\n    FROM claimed\n);",
+        "options": {
+          "queryReplacement": "={{\n[\n  Number(\n    $(\"Configurar procesamiento WF-018\")\n      .first()\n      .json\n      .max_evaluations\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        416,
+        -400
+      ],
+      "id": "caccbe22-9f6e-4ce5-89db-735cb383dfb6",
+      "name": "Tomar evaluaciones pendientes WF-018",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items =\n  $input.all();\n\nconst uuidPattern =\n  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\n\nreturn items.map((item) => {\n  const input =\n    item.json ?? {};\n\n  const rawHasEvaluation =\n    input.has_evaluation;\n\n  const rawBoolean =\n    rawHasEvaluation === true\n    || rawHasEvaluation === 1\n    || String(\n      rawHasEvaluation ?? ''\n    )\n      .trim()\n      .toLowerCase() === 'true'\n    || String(\n      rawHasEvaluation ?? ''\n    )\n      .trim() === '1';\n\n  const evaluationId =\n    String(\n      input.evaluation_id ?? ''\n    ).trim();\n\n  const hasValidEvaluationId =\n    uuidPattern.test(\n      evaluationId\n    );\n\n  const hasEvaluation =\n    rawBoolean\n    && hasValidEvaluationId;\n\n  return {\n    json: {\n      ...input,\n\n      has_evaluation_raw:\n        rawHasEvaluation ?? null,\n\n      has_evaluation_boolean:\n        hasEvaluation,\n\n      has_evaluation_flag:\n        hasEvaluation\n          ? 1\n          : 0,\n\n      has_valid_evaluation_id:\n        hasValidEvaluationId,\n\n      normalized_evaluation_id:\n        hasValidEvaluationId\n          ? evaluationId\n          : null,\n\n      evaluation_route:\n        hasEvaluation\n          ? 'EVALUATION_AVAILABLE'\n          : 'NO_EVALUATIONS',\n\n      workflow_code:\n        'WF-018',\n\n      normalized_at:\n        new Date().toISOString(),\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        -400
+      ],
+      "id": "df64ccd0-2a3e-4fb7-8724-749fdb7d9c6f",
+      "name": "Normalizar evaluaciones WF-018"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "068d120d-b49c-4b81-972e-894f953b5ee3",
+              "leftValue": "={{ $json.has_evaluation_flag }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        832,
+        -400
+      ],
+      "id": "1eb43ffb-94f7-477f-8e31-9d1c16a6f934",
+      "name": "¿Hay evaluaciones para procesar WF-018?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "227e8003-d7fe-439e-a34e-fab0a7e0510f",
+              "leftValue": "={{ $json.lock_acquired_flag }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        832,
+        -224
+      ],
+      "id": "6b6065fe-ef1c-4d03-9189-8771e7875f70",
+      "name": "¿Bloqueo adquirido WF-018?"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        160,
+        -768
+      ],
+      "id": "77377253-b691-4f37-8e19-38c6fa1a2046",
+      "name": "Procesar evaluaciones una a una WF-018"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS\n(\n    SELECT\n        NULLIF(\n            BTRIM(\n                $1::TEXT\n            ),\n            ''\n        )\n            AS raw_evaluation_id,\n\n        NULLIF(\n            BTRIM(\n                $2::TEXT\n            ),\n            ''\n        )\n            AS n8n_execution_id\n),\n\nvalidated AS\n(\n    SELECT\n        CASE\n            WHEN raw_evaluation_id\n                 ~*\n                 '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'\n\n                THEN raw_evaluation_id::UUID\n\n            ELSE NULL::UUID\n        END\n            AS evaluation_id,\n\n        n8n_execution_id\n\n    FROM parameters\n),\n\ngenerated AS\n(\n    SELECT\n        result.*\n\n    FROM validated\n        AS parameters\n\n    CROSS JOIN LATERAL\n        saas.generate_opportunity_action_plan_v1\n        (\n            parameters.evaluation_id,\n            parameters.n8n_execution_id\n        )\n        AS result\n\n    WHERE parameters.evaluation_id\n          IS NOT NULL\n)\n\nSELECT\n    TRUE\n        AS has_plan,\n\n    generated.*\n\nFROM generated\n\n\nUNION ALL\n\n\nSELECT\n    FALSE\n        AS has_plan,\n\n    NULL::UUID\n        AS action_plan_id,\n\n    parameters.evaluation_id,\n\n    NULL::TEXT\n        AS process_reference,\n\n    'invalid_evaluation_id'::TEXT\n        AS result_code,\n\n    NULL::TEXT\n        AS plan_status,\n\n    NULL::TEXT\n        AS priority_level,\n\n    NULL::NUMERIC\n        AS compliance_score,\n\n    0::INTEGER\n        AS total_action_count,\n\n    0::INTEGER\n        AS open_action_count,\n\n    0::INTEGER\n        AS blocker_action_count,\n\n    0::INTEGER\n        AS critical_action_count,\n\n    0::INTEGER\n        AS high_action_count,\n\n    0::INTEGER\n        AS medium_action_count,\n\n    0::INTEGER\n        AS low_action_count,\n\n    0::INTEGER\n        AS manual_review_action_count,\n\n    NULL::TEXT\n        AS input_hash_sha256,\n\n    0::INTEGER\n        AS plan_version,\n\n    FALSE\n        AS changes_applied\n\nFROM validated\n    AS parameters\n\nWHERE parameters.evaluation_id\n      IS NULL;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $json.evaluation_id ?? \"\"\n  ),\n\n  String(\n    $execution.id ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        368,
+        -656
+      ],
+      "id": "982fea04-4fb1-4530-af28-a1e4d4439396",
+      "name": "Generar plan V1 WF-018",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 2,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst uuidPattern =\n  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\n\nreturn items.map((item) => {\n  const input =\n    item.json ?? {};\n\n  const rawHasPlan =\n    input.has_plan;\n\n  const rawBoolean =\n    rawHasPlan === true\n    || rawHasPlan === 1\n    || String(\n      rawHasPlan ?? ''\n    )\n      .trim()\n      .toLowerCase() === 'true'\n    || String(\n      rawHasPlan ?? ''\n    )\n      .trim() === '1';\n\n  const planId =\n    String(\n      input.action_plan_id ?? ''\n    ).trim();\n\n  const validPlanId =\n    uuidPattern.test(\n      planId\n    );\n\n  const hasPlan =\n    rawBoolean\n    && validPlanId;\n\n  return {\n    json: {\n      ...input,\n\n      has_plan_boolean:\n        hasPlan,\n\n      has_plan_flag:\n        hasPlan ? 1 : 0,\n\n      has_valid_plan_id:\n        validPlanId,\n\n      normalized_action_plan_id:\n        validPlanId\n          ? planId\n          : null,\n\n      plan_route:\n        hasPlan\n          ? 'PLAN_GENERATED'\n          : 'PLAN_NOT_GENERATED',\n\n      workflow_code:\n        'WF-018',\n\n      normalized_at:\n        new Date().toISOString(),\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        -656
+      ],
+      "id": "acd06421-b6f2-4e51-96a4-92e2f2c8fa8f",
+      "name": "Normalizar resultado de plan WF-018"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "46d89b6b-17ec-428e-93c4-ef101eb2ee72",
+              "leftValue": "={{ $json.has_plan_flag }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        752,
+        -656
+      ],
+      "id": "709a314f-74bd-4da1-a4a5-ed0e6aee8991",
+      "name": "¿Plan generado WF-018?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS\n(\n    SELECT\n        NULLIF(\n            BTRIM(\n                $1::TEXT\n            ),\n            ''\n        )::UUID\n            AS action_plan_id,\n\n        NULLIF(\n            BTRIM(\n                $2::TEXT\n            ),\n            ''\n        )\n            AS execution_id\n),\n\nupdated_plan AS\n(\n    UPDATE saas.opportunity_action_plans\n        AS plan\n\n    SET\n        metadata =\n            COALESCE(\n                plan.metadata,\n                '{}'::JSONB\n            )\n            ||\n            jsonb_build_object(\n                'production_workflow',\n                'WF-018',\n\n                'production_execution_id',\n                parameters.execution_id,\n\n                'production_processed_at',\n                NOW()\n            ),\n\n        n8n_execution_id =\n            parameters.execution_id,\n\n        updated_at =\n            NOW()\n\n    FROM parameters\n\n    WHERE plan.id =\n          parameters.action_plan_id\n\n    RETURNING\n        plan.id,\n        plan.evaluation_id,\n        plan.process_reference,\n        plan.plan_version,\n        plan.plan_status,\n        plan.priority_level,\n        plan.compliance_score,\n        plan.total_action_count,\n        plan.open_action_count,\n        plan.blocker_action_count,\n        plan.generation_status,\n        plan.updated_at\n)\n\nSELECT\n    TRUE\n        AS plan_processed,\n\n    'PLAN_RESULT_REGISTERED'\n        AS registration_status,\n\n    updated.*\n\nFROM updated_plan\n    AS updated;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $json.action_plan_id ?? \"\"\n  ),\n\n  String(\n    $execution.id ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        960,
+        -752
+      ],
+      "id": "ea185cb1-8e01-4bad-ab55-e31af3c22f1c",
+      "name": "Registrar resultado de plan WF-018",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH metrics AS\n(\n    SELECT\n        COUNT(*)::INTEGER\n            AS processed_plans,\n\n        COUNT(*) FILTER (\n            WHERE plan.plan_status =\n                  'blocked'\n        )::INTEGER\n            AS blocked_count,\n\n        COUNT(*) FILTER (\n            WHERE plan.plan_status =\n                  'manual_review'\n        )::INTEGER\n            AS manual_review_count,\n\n        COUNT(*) FILTER (\n            WHERE plan.plan_status =\n                  'needs_action'\n        )::INTEGER\n            AS needs_action_count,\n\n        COUNT(*) FILTER (\n            WHERE plan.plan_status =\n                  'completed'\n        )::INTEGER\n            AS completed_count,\n\n        COALESCE(\n            SUM(\n                plan.total_action_count\n            ),\n            0\n        )::INTEGER\n            AS generated_action_count,\n\n        COALESCE(\n            SUM(\n                plan.blocker_action_count\n            ),\n            0\n        )::INTEGER\n            AS blocker_action_count\n\n    FROM saas.opportunity_action_plans\n        AS plan\n\n    WHERE plan.metadata\n              ->> 'production_execution_id'\n          =\n          $1::TEXT\n),\n\nfinalized AS\n(\n    UPDATE ops.workflow_runs\n        AS run\n\n    SET\n        status =\n            'success',\n\n        finished_at =\n            NOW(),\n\n        completion_reason =\n            CASE\n                WHEN metrics.processed_plans = 0\n                    THEN 'no_evaluations'\n\n                ELSE 'completed'\n            END,\n\n        error_message =\n            NULL,\n\n        error_details =\n            COALESCE(\n                run.error_details,\n                '{}'::JSONB\n            )\n            ||\n            jsonb_build_object(\n                'workflow_code',\n                'WF-018',\n\n                'processed_plans',\n                metrics.processed_plans,\n\n                'blocked_count',\n                metrics.blocked_count,\n\n                'manual_review_count',\n                metrics.manual_review_count,\n\n                'needs_action_count',\n                metrics.needs_action_count,\n\n                'completed_count',\n                metrics.completed_count,\n\n                'generated_action_count',\n                metrics.generated_action_count,\n\n                'blocker_action_count',\n                metrics.blocker_action_count,\n\n                'finished_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM metrics\n\n    WHERE run.workflow_code =\n          'WF-018'\n\n      AND run.n8n_execution_id =\n          $1::TEXT\n\n      AND run.status =\n          'running'\n\n    RETURNING\n        run.id,\n        run.status,\n        run.completion_reason,\n        run.finished_at\n)\n\nSELECT\n    metrics.processed_plans,\n\n    metrics.blocked_count,\n\n    metrics.manual_review_count,\n\n    metrics.needs_action_count,\n\n    metrics.completed_count,\n\n    metrics.generated_action_count,\n\n    metrics.blocker_action_count,\n\n    CASE\n        WHEN metrics.processed_plans = 0\n            THEN 'no_evaluations'\n\n        ELSE 'completed'\n    END\n        AS completion_reason,\n\n    EXISTS (\n        SELECT 1\n        FROM finalized\n    )\n        AS execution_finalized,\n\n    NOW()\n        AS finished_at\n\nFROM metrics;",
+        "options": {
+          "queryReplacement": "={{ [ String($execution.id ?? '') ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1088,
+        -528
+      ],
+      "id": "9d0883d6-f98a-42db-9555-4eff58a59931",
+      "name": "Finalizar ejecución WF-018",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH released AS\n(\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'success',\n\n        active_execution_id =\n            NULL,\n\n        lock_acquired_at =\n            NULL,\n\n        lock_expires_at =\n            NULL,\n\n        error_message =\n            NULL,\n\n        metadata =\n            (\n                COALESCE(\n                    cursor.metadata,\n                    '{}'::JSONB\n                )\n                - 'active_workflow'\n                - 'active_execution_id'\n                - 'active_execution_started_at'\n            )\n            ||\n            jsonb_build_object(\n                'last_successful_workflow',\n                'WF-018',\n\n                'last_successful_execution_id',\n                $2::TEXT,\n\n                'last_successful_finished_at',\n                NOW(),\n\n                'plan_version',\n                1,\n\n                'generation_method',\n                'deterministic_v1'\n            ),\n\n        updated_at =\n            NOW()\n\n    WHERE cursor.source_code =\n          $1::TEXT\n\n      AND cursor.active_execution_id::TEXT =\n          $2::TEXT\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n        cursor.error_message,\n        cursor.updated_at\n)\n\nSELECT\n    TRUE\n        AS lock_released,\n\n    released.source_code,\n\n    released.status\n        AS cursor_status,\n\n    released.active_execution_id,\n\n    released.lock_acquired_at,\n\n    released.lock_expires_at,\n\n    released.error_message,\n\n    released.updated_at\n\nFROM released\n\n\nUNION ALL\n\n\nSELECT\n    FALSE\n        AS lock_released,\n\n    cursor.source_code,\n\n    cursor.status\n        AS cursor_status,\n\n    cursor.active_execution_id,\n\n    cursor.lock_acquired_at,\n\n    cursor.lock_expires_at,\n\n    cursor.error_message,\n\n    cursor.updated_at\n\nFROM ops.sync_cursors\n    AS cursor\n\nWHERE cursor.source_code =\n      $1::TEXT\n\n  AND NOT EXISTS (\n      SELECT 1\n      FROM released\n  )\n\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-018\")\n      .first()\n      .json\n      .source_code\n  ),\n\n  String(\n    $execution.id ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1296,
+        -528
+      ],
+      "id": "e2f7620f-7c0f-4e16-bb4a-c432ecee94e4",
+      "name": "Liberar bloqueo WF-018",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "requested_by_user_id"
+            },
+            {
+              "name": "process_id"
+            },
+            {
+              "name": "processing_mode"
+            },
+            {
+              "name": "orchestration_execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        224
+      ],
+      "id": "3b2ff622-2065-4e7a-b948-b6e41ed36c9c",
+      "name": "When Executed by Another Workflow"
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configurar procesamiento WF-018": {
+      "main": [
+        [
+          {
+            "node": "Inicializar cursor WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inicializar cursor WF-018": {
+      "main": [
+        [
+          {
+            "node": "Recuperar bloqueo vencido WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recuperar bloqueo vencido WF-018": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adquirir bloqueo WF-018": {
+      "main": [
+        [
+          {
+            "node": "Normalizar resultado de bloqueo WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar resultado de bloqueo WF-018": {
+      "main": [
+        [
+          {
+            "node": "¿Bloqueo adquirido WF-018?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Omitir ejecución por bloqueo WF-018": {
+      "main": [
+        []
+      ]
+    },
+    "Registrar inicio WF-018": {
+      "main": [
+        [
+          {
+            "node": "Tomar evaluaciones pendientes WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tomar evaluaciones pendientes WF-018": {
+      "main": [
+        [
+          {
+            "node": "Normalizar evaluaciones WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar evaluaciones WF-018": {
+      "main": [
+        [
+          {
+            "node": "¿Hay evaluaciones para procesar WF-018?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Bloqueo adquirido WF-018?": {
+      "main": [
+        [
+          {
+            "node": "Registrar inicio WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Omitir ejecución por bloqueo WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay evaluaciones para procesar WF-018?": {
+      "main": [
+        [
+          {
+            "node": "Procesar evaluaciones una a una WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalizar ejecución WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar evaluaciones una a una WF-018": {
+      "main": [
+        [
+          {
+            "node": "Finalizar ejecución WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generar plan V1 WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generar plan V1 WF-018": {
+      "main": [
+        [
+          {
+            "node": "Normalizar resultado de plan WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar resultado de plan WF-018": {
+      "main": [
+        [
+          {
+            "node": "¿Plan generado WF-018?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Plan generado WF-018?": {
+      "main": [
+        [
+          {
+            "node": "Registrar resultado de plan WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Procesar evaluaciones una a una WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar resultado de plan WF-018": {
+      "main": [
+        [
+          {
+            "node": "Procesar evaluaciones una a una WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalizar ejecución WF-018": {
+      "main": [
+        [
+          {
+            "node": "Liberar bloqueo WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-018",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "CernoIAProdWF007",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Bogota",
+    "executionTimeout": 1800,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

@@ -1,0 +1,636 @@
+{
+  "id": "CernoIAProdWF002",
+  "name": "[CernoIA PROD] WF-002 - Historial de cambios y versiones SECOP II",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        64,
+        256
+      ],
+      "id": "629ee14f-e2ac-4b00-a49e-a008da6492e1",
+      "name": "Inicio Manual WF-002"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    source_code,\n    cursor_timestamp,\n    cursor_process_id,\n    status,\n    metadata\nFROM ops.sync_cursors\nWHERE source_code =\n    'SECOP_II_PROCESS_VERSIONS';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        720,
+        -176
+      ],
+      "id": "9b7d2587-2148-4180-b594-2590d2d8073b",
+      "name": "Leer cursor WF-002",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH cursor_data AS (\n    SELECT\n        COALESCE(\n            cursor_timestamp,\n            '1970-01-01 00:00:00+00'::TIMESTAMPTZ\n        ) AS cursor_timestamp,\n\n        COALESCE(\n            cursor_process_id,\n            ''\n        ) AS cursor_version_id\n\n    FROM ops.sync_cursors\n\n    WHERE source_code =\n        'SECOP_II_PROCESS_VERSIONS'\n)\n\nSELECT\n    version.id AS version_id,\n    version.process_id,\n    version.secop_process_id,\n    version.version_number,\n    version.change_type,\n\n    version.previous_hash,\n    version.new_hash,\n    version.changed_fields,\n\n    version.source_updated_at,\n    version.captured_at,\n\n    version.snapshot AS current_snapshot,\n    previous_version.snapshot AS previous_snapshot,\n\n    process.reference,\n    process.entity_name,\n    process.entity_nit,\n    process.department,\n    process.city,\n\n    process.process_name,\n    process.description,\n\n    process.procurement_method,\n    process.contract_type,\n\n    process.base_price,\n    process.process_status,\n    process.opening_status,\n    process.awarded,\n    process.total_awarded_value,\n\n    process.publication_date,\n    process.process_url\n\nFROM secop.process_versions AS version\n\nJOIN secop.processes AS process\n    ON process.id = version.process_id\n\nLEFT JOIN secop.process_versions AS previous_version\n    ON previous_version.process_id = version.process_id\n   AND previous_version.version_number =\n       version.version_number - 1\n\nCROSS JOIN cursor_data\n\nWHERE version.change_type = 'updated'\n\n  AND (\n      version.captured_at >\n          cursor_data.cursor_timestamp\n\n      OR (\n          version.captured_at =\n              cursor_data.cursor_timestamp\n\n          AND version.id::TEXT >\n              cursor_data.cursor_version_id\n      )\n  )\n\nORDER BY\n    version.captured_at ASC,\n    version.id::TEXT ASC\n\nLIMIT 500;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        928,
+        -176
+      ],
+      "id": "58083a42-2c7e-4a83-959f-b6b5d9c767e8",
+      "name": "Leer versiones pendientes",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e95f76c8-49ed-4157-b52c-740abf97632f",
+              "leftValue": "={{ Boolean($json.version_id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        976,
+        96
+      ],
+      "id": "a44297da-322b-4233-9008-1bd3a857a792",
+      "name": "¿Hay versiones nuevas?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\n\n/**\n * Convierte changed_fields en un arreglo,\n * independientemente de cómo lo entregue PostgreSQL.\n */\nfunction normalizeArray(value) {\n  if (Array.isArray(value)) {\n    return value.map((item) => String(item));\n  }\n\n  if (typeof value === 'string' && value.trim() !== '') {\n    try {\n      const parsed = JSON.parse(value);\n\n      if (Array.isArray(parsed)) {\n        return parsed.map((item) => String(item));\n      }\n    } catch {\n      return value\n        .split(',')\n        .map((item) => item.trim())\n        .filter(Boolean);\n    }\n  }\n\n  return [];\n}\n\nconst changedFields = normalizeArray(data.changed_fields);\n\nconst budgetFields = new Set([\n  'precio_base',\n  'valor_total_adjudicacion',\n]);\n\nconst statusFields = new Set([\n  'fase',\n  'estado_del_procedimiento',\n  'id_estado_del_procedimiento',\n  'estado_de_apertura_del_proceso',\n  'estado_resumen',\n]);\n\nconst dateFields = new Set([\n  'fecha_de_publicacion_del',\n  'fecha_de_ultima_publicaci',\n  'fecha_de_publicacion_fase_3',\n]);\n\nconst awardFields = new Set([\n  'adjudicado',\n  'id_adjudicacion',\n  'codigoproveedor',\n  'departamento_proveedor',\n  'ciudad_proveedor',\n  'valor_total_adjudicacion',\n  'nombre_del_proveedor_adjudicado',\n  'nit_del_proveedor_adjudicado',\n]);\n\nconst categories = new Set();\n\nfor (const field of changedFields) {\n  if (budgetFields.has(field)) {\n    categories.add('budget');\n  }\n\n  if (statusFields.has(field)) {\n    categories.add('status');\n  }\n\n  if (dateFields.has(field)) {\n    categories.add('date');\n  }\n\n  if (awardFields.has(field)) {\n    categories.add('award');\n  }\n}\n\nconst categoryList = [...categories];\n\nlet eventType = 'other';\n\nif (categoryList.length > 1) {\n  eventType = 'multiple_changes';\n} else if (categories.has('award')) {\n  eventType = 'award_changed';\n} else if (categories.has('budget')) {\n  eventType = 'budget_changed';\n} else if (categories.has('status')) {\n  eventType = 'status_changed';\n} else if (categories.has('date')) {\n  eventType = 'date_changed';\n}\n\n/**\n * Relevancia inicial basada en reglas.\n * Más adelante la IA podrá enriquecer esta clasificación.\n */\nlet relevanceLevel = 'low';\n\nif (categories.has('award')) {\n  relevanceLevel = 'critical';\n} else if (\n  categories.has('budget') ||\n  categories.has('status') ||\n  categories.has('date')\n) {\n  relevanceLevel = 'high';\n} else if (changedFields.length >= 5) {\n  relevanceLevel = 'medium';\n}\n\nconst previousSnapshot =\n  data.previous_snapshot &&\n  typeof data.previous_snapshot === 'object'\n    ? data.previous_snapshot\n    : {};\n\nconst currentSnapshot =\n  data.current_snapshot &&\n  typeof data.current_snapshot === 'object'\n    ? data.current_snapshot\n    : {};\n\nconst previousRaw =\n  previousSnapshot.raw_json &&\n  typeof previousSnapshot.raw_json === 'object'\n    ? previousSnapshot.raw_json\n    : {};\n\nconst currentRaw =\n  currentSnapshot.raw_json &&\n  typeof currentSnapshot.raw_json === 'object'\n    ? currentSnapshot.raw_json\n    : {};\n\n/**\n * Conserva los valores anteriores y nuevos\n * únicamente para los campos que cambiaron.\n */\nconst rawChanges = {};\n\nfor (const field of changedFields) {\n  rawChanges[field] = {\n    before:\n      previousRaw[field] !== undefined\n        ? previousRaw[field]\n        : null,\n\n    after:\n      currentRaw[field] !== undefined\n        ? currentRaw[field]\n        : null,\n  };\n}\n\nconst importantNormalizedFields = [\n  'base_price',\n  'process_status',\n  'opening_status',\n  'awarded',\n  'total_awarded_value',\n  'publication_date',\n  'source_updated_at',\n  'procurement_method',\n  'contract_type',\n];\n\nconst normalizedBefore = {};\nconst normalizedAfter = {};\n\nfor (const field of importantNormalizedFields) {\n  normalizedBefore[field] =\n    previousSnapshot[field] !== undefined\n      ? previousSnapshot[field]\n      : null;\n\n  normalizedAfter[field] =\n    currentSnapshot[field] !== undefined\n      ? currentSnapshot[field]\n      : null;\n}\n\nreturn {\n  json: {\n    version_id: data.version_id,\n    process_id: data.process_id,\n    secop_process_id: data.secop_process_id,\n    version_number: Number(data.version_number),\n\n    event_type: eventType,\n    relevance_level: relevanceLevel,\n\n    changed_fields: changedFields,\n\n    change_summary: {\n      changed_count: changedFields.length,\n      categories: categoryList,\n      raw_changes: rawChanges,\n      normalized_before: normalizedBefore,\n      normalized_after: normalizedAfter,\n    },\n\n    status: 'pending',\n\n    source_updated_at:\n      data.source_updated_at || null,\n\n    metadata: {\n      reference: data.reference || null,\n      entity_name: data.entity_name || null,\n      entity_nit: data.entity_nit || null,\n      department: data.department || null,\n      city: data.city || null,\n      process_name: data.process_name || null,\n      process_url: data.process_url || null,\n\n      captured_at: data.captured_at || null,\n\n      classification_method: 'deterministic_rules',\n      classification_version: 'rules_v1',\n    },\n  },\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1264,
+        -176
+      ],
+      "id": "409fde81-83ca-4134-87b2-17f3419f3036",
+      "name": "Clasificar cambio WF-002"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO secop.process_change_events (\n    version_id,\n    process_id,\n    secop_process_id,\n    version_number,\n\n    event_type,\n    relevance_level,\n\n    changed_fields,\n    change_summary,\n\n    status,\n    source_updated_at,\n\n    metadata,\n\n    detected_at,\n    created_at,\n    updated_at\n)\nVALUES (\n    $1::UUID,\n\n    $2::UUID,\n\n    $3::TEXT,\n\n    $4::BIGINT,\n\n    $5::TEXT,\n\n    $6::TEXT,\n\n    $7::JSONB,\n\n    $8::JSONB,\n\n    $9::TEXT,\n\n    $10::TIMESTAMPTZ,\n\n    $11::JSONB,\n\n    NOW(),\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (version_id)\nDO UPDATE SET\n    process_id = EXCLUDED.process_id,\n    secop_process_id = EXCLUDED.secop_process_id,\n    version_number = EXCLUDED.version_number,\n\n    event_type = EXCLUDED.event_type,\n    relevance_level = EXCLUDED.relevance_level,\n\n    changed_fields = EXCLUDED.changed_fields,\n    change_summary = EXCLUDED.change_summary,\n\n    status = EXCLUDED.status,\n    source_updated_at = EXCLUDED.source_updated_at,\n\n    metadata = EXCLUDED.metadata,\n\n    updated_at = NOW()\n\nRETURNING\n    id,\n    version_id,\n    process_id,\n    secop_process_id,\n    version_number,\n    event_type,\n    relevance_level,\n    changed_fields,\n    change_summary,\n    status,\n    source_updated_at,\n    detected_at,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $json.version_id, $json.process_id, String($json.secop_process_id ?? \"\"), Number($json.version_number), String($json.event_type ?? \"other\"), String($json.relevance_level ?? \"pending\"), JSON.stringify($json.changed_fields ?? []), JSON.stringify($json.change_summary ?? {}), String($json.status ?? \"pending\"), $json.source_updated_at ? new Date($json.source_updated_at).toISOString() : null, JSON.stringify($json.metadata ?? {}) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1440,
+        -176
+      ],
+      "id": "daf0f3c3-663e-4c0f-b5ee-aa845dabe6c3",
+      "name": "Guardar evento de cambio",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $('Leer versiones pendientes')\n  .all(0, $runIndex)\n  .filter((item) => item.json.version_id);\n\n// La consulta PostgreSQL ya entrega las versiones ordenadas.\n// Por eso tomamos directamente la última del lote.\nif (items.length === 0) {\n  return [];\n}\n\nconst lastItem = items[items.length - 1].json;\n\nreturn [\n  {\n    json: {\n      source_code: 'SECOP_II_PROCESS_VERSIONS',\n\n      // Enviamos solamente el UUID.\n      // PostgreSQL recuperará la fecha exacta con microsegundos.\n      cursor_version_id: String(lastItem.version_id),\n\n      batch_count: items.length,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        -176
+      ],
+      "id": "1fab3570-3c93-47b2-94ac-cd3143f7ca11",
+      "name": "Preparar avance cursor WF-002"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH last_version AS (\n    SELECT\n        id,\n        captured_at\n    FROM secop.process_versions\n    WHERE id =\n        $1::UUID\n),\n\ncursor_updated AS (\n    UPDATE ops.sync_cursors AS cursor\n    SET\n        -- Avanza usando la fecha exacta guardada en PostgreSQL.\n        cursor_timestamp =\n            last_version.captured_at,\n\n        cursor_process_id =\n            last_version.id::TEXT,\n\n        -- La ejecución aún continúa.\n        status = 'running',\n\n        last_run_at = NOW(),\n\n        records_processed =\n            cursor.records_processed\n            + $2::BIGINT,\n\n        error_message = NULL,\n\n        -- Renueva el bloqueo después de cada lote.\n        lock_expires_at =\n            NOW() + INTERVAL '30 minutes',\n\n        metadata =\n            COALESCE(cursor.metadata, '{}'::JSONB)\n            || jsonb_build_object(\n                'workflow_code',\n                'WF-002',\n\n                'last_batch_count',\n                $3::BIGINT,\n\n                'last_version_timestamp',\n                last_version.captured_at,\n\n                'last_version_id',\n                last_version.id::TEXT,\n\n                'current_execution_id',\n                $4::TEXT,\n\n                'current_execution_batches',\n                COALESCE(\n                    NULLIF(\n                        cursor.metadata\n                            ->> 'current_execution_batches',\n                        ''\n                    )::INTEGER,\n                    0\n                ) + 1,\n\n                'current_execution_records',\n                COALESCE(\n                    NULLIF(\n                        cursor.metadata\n                            ->> 'current_execution_records',\n                        ''\n                    )::BIGINT,\n                    0\n                ) + $5::BIGINT,\n\n                'lock_renewed_at',\n                NOW()\n            ),\n\n        updated_at = NOW()\n\n    FROM last_version\n\n    WHERE cursor.source_code =\n        'SECOP_II_PROCESS_VERSIONS'\n\n      AND cursor.active_execution_id =\n        $6::TEXT\n\n    RETURNING\n        cursor.source_code,\n        cursor.cursor_timestamp,\n        cursor.cursor_process_id,\n        cursor.status,\n\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n\n        cursor.records_processed,\n        cursor.metadata,\n        cursor.updated_at\n),\n\nrun_updated AS (\n    UPDATE ops.workflow_runs AS run\n    SET\n        batches_processed =\n            run.batches_processed + 1,\n\n        records_read =\n            run.records_read\n            + $7::BIGINT,\n\n        -- Cada versión procesada produce un evento.\n        records_written =\n            run.records_written\n            + $8::BIGINT,\n\n        cursor_end_timestamp =\n            last_version.captured_at,\n\n        cursor_end_process_id =\n            last_version.id::TEXT,\n\n        updated_at = NOW()\n\n    FROM\n        last_version,\n        cursor_updated\n\n    WHERE run.n8n_execution_id =\n        $9::TEXT\n\n      AND run.workflow_code = 'WF-002'\n\n      AND run.status = 'running'\n\n    RETURNING\n        run.id,\n        run.n8n_execution_id,\n        run.status,\n        run.batches_processed,\n        run.records_read,\n        run.records_written,\n        run.cursor_end_timestamp,\n        run.cursor_end_process_id,\n        run.updated_at\n)\n\nSELECT\n    cursor_updated.source_code,\n    cursor_updated.cursor_timestamp,\n    cursor_updated.cursor_process_id,\n    cursor_updated.status,\n\n    cursor_updated.active_execution_id,\n    cursor_updated.lock_acquired_at,\n    cursor_updated.lock_expires_at,\n\n    cursor_updated.records_processed,\n    cursor_updated.metadata,\n\n    run_updated.id AS workflow_run_id,\n    run_updated.n8n_execution_id,\n    run_updated.batches_processed,\n    run_updated.records_read,\n    run_updated.records_written,\n    run_updated.cursor_end_timestamp,\n    run_updated.cursor_end_process_id\n\nFROM cursor_updated\n\nLEFT JOIN run_updated\n    ON TRUE;",
+        "options": {
+          "queryReplacement": "={{ [ $json.cursor_version_id, Number($json.batch_count), Number($json.batch_count), $execution.id, Number($json.batch_count), $execution.id, Number($json.batch_count), Number($json.batch_count), $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1824,
+        -176
+      ],
+      "id": "8d7f2cbc-b140-4c44-8437-4b4870ab3962",
+      "name": "Actualizar cursor WF-002",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "8b8b05ca-f40e-471a-a23c-ff1b27f45d03",
+              "leftValue": "={{ Number($json.metadata?.last_batch_count ?? 0) }}",
+              "rightValue": "={{ 500 }}",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "1e5c7ea5-87f7-4de2-b8b5-d9ec4bd3c383",
+              "leftValue": "={{ $runIndex }}",
+              "rightValue": "={{ 2 }}",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1840,
+        96
+      ],
+      "id": "0afd26d2-94fc-48f7-81a4-ee732ecac911",
+      "name": "¿Hay otro lote WF-002?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2112,
+        80
+      ],
+      "id": "9a7756b4-9008-4281-8e01-bc819cd6181a",
+      "name": "Pausa entre lotes WF-002",
+      "webhookId": "04119566-a9ee-4eb6-9f81-ab9130252001"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ops.sync_cursors AS cursor\nSET\n    active_execution_id = $1::TEXT,\n\n    lock_acquired_at = NOW(),\n    lock_expires_at = NOW() + INTERVAL '30 minutes',\n\n    status = 'running',\n    last_run_at = NOW(),\n    error_message = NULL,\n\n    metadata =\n        COALESCE(cursor.metadata, '{}'::JSONB)\n        || jsonb_build_object(\n            'workflow_code',\n            'WF-002',\n\n            'current_execution_id',\n            $2::TEXT,\n\n            'current_execution_batches',\n            0,\n\n            'current_execution_records',\n            0,\n\n            'current_execution_started_at',\n            NOW()\n        ),\n\n    updated_at = NOW()\n\nWHERE cursor.source_code =\n    'SECOP_II_PROCESS_VERSIONS'\n\n  AND (\n      cursor.active_execution_id IS NULL\n      OR cursor.lock_expires_at IS NULL\n      OR cursor.lock_expires_at <= NOW()\n      OR cursor.active_execution_id = $3::TEXT\n  )\n\nRETURNING\n    cursor.source_code,\n    cursor.cursor_timestamp,\n    cursor.cursor_process_id,\n\n    cursor.active_execution_id,\n    cursor.lock_acquired_at,\n    cursor.lock_expires_at,\n\n    cursor.status,\n    cursor.records_processed,\n    cursor.metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.id, $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        288,
+        80
+      ],
+      "id": "d1f12876-15d6-4f8a-9b7b-f19fbc5621ab",
+      "name": "Adquirir bloqueo WF-002",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5f02873d-361e-431d-badc-a70d755428ce",
+              "leftValue": "={{ String($json.active_execution_id || '') === String($execution.id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        480,
+        80
+      ],
+      "id": "ac576359-9a86-49ce-92aa-71282e0f78ed",
+      "name": "¿Bloqueo WF-002 adquirido?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs (\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n\n    started_at,\n    finished_at,\n\n    completion_reason,\n\n    metadata,\n\n    created_at,\n    updated_at\n)\nSELECT\n    'WF-002',\n    'SECOP_II_PROCESS_VERSIONS',\n    $1::TEXT,\n    $2::TEXT,\n    'skipped',\n\n    NOW(),\n    NOW(),\n\n    'concurrent_execution',\n\n    jsonb_build_object(\n        'reason',\n        'Otra ejecución del WF-002 tiene un bloqueo vigente',\n\n        'attempted_execution_id',\n        $3::TEXT,\n\n        'blocking_execution_id',\n        cursor.active_execution_id,\n\n        'lock_acquired_at',\n        cursor.lock_acquired_at,\n\n        'lock_expires_at',\n        cursor.lock_expires_at,\n\n        'registered_at',\n        NOW()\n    ),\n\n    NOW(),\n    NOW()\n\nFROM ops.sync_cursors AS cursor\n\nWHERE cursor.source_code =\n    'SECOP_II_PROCESS_VERSIONS'\n\nON CONFLICT (n8n_execution_id)\nDO UPDATE SET\n    status = 'skipped',\n    finished_at = NOW(),\n    completion_reason = 'concurrent_execution',\n\n    metadata =\n        COALESCE(\n            ops.workflow_runs.metadata,\n            '{}'::JSONB\n        )\n        || EXCLUDED.metadata,\n\n    updated_at = NOW()\n\nRETURNING\n    id,\n    workflow_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    finished_at,\n    completion_reason,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.mode ?? \"unknown\", $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        688,
+        96
+      ],
+      "id": "492f7244-879c-4f72-9fa9-56c25aee4c0b",
+      "name": "Registrar ejecución omitida WF-002",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ab68a732-1213-4f32-860f-ac2ab40d8b01",
+              "name": "completion_reason",
+              "value": "no_versions",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1216,
+        112
+      ],
+      "id": "6e3d1665-c009-4dec-9a9a-1dc7396852d6",
+      "name": "Preparar cierre sin versiones WF-002"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b61fecec-d040-4024-970b-56e110ffd5d2",
+              "name": "completion_reason",
+              "value": "={{\n  Number($json.metadata?.last_batch_count ?? 0) < 500\n    ? 'caught_up'\n    : 'safety_limit_reached'\n}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2000,
+        304
+      ],
+      "id": "f385cdb8-2e9c-4b13-8787-caeceba61cfc",
+      "name": "Preparar cierre de sincronización WF-002"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH cursor_snapshot AS (\n    SELECT\n        cursor.cursor_timestamp,\n        cursor.cursor_process_id,\n\n        COALESCE(\n            NULLIF(\n                cursor.metadata\n                    ->> 'current_execution_batches',\n                ''\n            )::INTEGER,\n            0\n        ) AS current_batches,\n\n        COALESCE(\n            NULLIF(\n                cursor.metadata\n                    ->> 'current_execution_records',\n                ''\n            )::BIGINT,\n            0\n        ) AS current_records\n\n    FROM ops.sync_cursors AS cursor\n\n    WHERE cursor.source_code =\n        'SECOP_II_PROCESS_VERSIONS'\n\n      AND cursor.active_execution_id =\n        $1::TEXT\n),\n\nrun_finished AS (\n    UPDATE ops.workflow_runs AS run\n    SET\n        status = 'success',\n\n        finished_at = NOW(),\n\n        batches_processed =\n            GREATEST(\n                run.batches_processed,\n                cursor_snapshot.current_batches\n            ),\n\n        records_read =\n            GREATEST(\n                run.records_read,\n                cursor_snapshot.current_records\n            ),\n\n        records_written =\n            GREATEST(\n                run.records_written,\n                cursor_snapshot.current_records\n            ),\n\n        cursor_end_timestamp =\n            cursor_snapshot.cursor_timestamp,\n\n        cursor_end_process_id =\n            cursor_snapshot.cursor_process_id,\n\n        completion_reason =\n            $2::TEXT,\n\n        error_node = NULL,\n        error_message = NULL,\n        error_details = '{}'::JSONB,\n\n        metadata =\n            COALESCE(\n                run.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'completion_reason',\n                $3::TEXT,\n\n                'finished_execution_id',\n                $4::TEXT,\n\n                'finished_at',\n                NOW()\n            ),\n\n        updated_at = NOW()\n\n    FROM cursor_snapshot\n\n    WHERE run.n8n_execution_id =\n        $5::TEXT\n\n      AND run.workflow_code = 'WF-002'\n\n    RETURNING\n        run.id,\n        run.n8n_execution_id,\n        run.status,\n        run.started_at,\n        run.finished_at,\n\n        run.batches_processed,\n        run.records_read,\n        run.records_written,\n\n        run.cursor_start_timestamp,\n        run.cursor_start_process_id,\n\n        run.cursor_end_timestamp,\n        run.cursor_end_process_id,\n\n        run.completion_reason\n),\n\ncursor_released AS (\n    UPDATE ops.sync_cursors AS cursor\n    SET\n        active_execution_id = NULL,\n        lock_acquired_at = NULL,\n        lock_expires_at = NULL,\n\n        status = 'success',\n\n        last_success_at = NOW(),\n\n        error_message = NULL,\n\n        metadata =\n            (\n                (\n                    (\n                        (\n                            COALESCE(\n                                cursor.metadata,\n                                '{}'::JSONB\n                            )\n                            - 'current_execution_id'\n                        )\n                        - 'current_execution_batches'\n                    )\n                    - 'current_execution_records'\n                )\n                - 'current_execution_started_at'\n            )\n            || jsonb_build_object(\n                'workflow_code',\n                'WF-002',\n\n                'last_completion_reason',\n                $6::TEXT,\n\n                'last_completed_execution_id',\n                $7::TEXT,\n\n                'last_completed_at',\n                NOW(),\n\n                'last_execution_batches',\n                cursor_snapshot.current_batches,\n\n                'last_execution_records',\n                cursor_snapshot.current_records\n            ),\n\n        updated_at = NOW()\n\n    FROM cursor_snapshot\n\n    WHERE cursor.source_code =\n        'SECOP_II_PROCESS_VERSIONS'\n\n      AND cursor.active_execution_id =\n        $8::TEXT\n\n    RETURNING\n        cursor.source_code,\n        cursor.cursor_timestamp,\n        cursor.cursor_process_id,\n\n        cursor.status,\n\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n\n        cursor.last_success_at,\n        cursor.records_processed,\n        cursor.metadata,\n        cursor.updated_at\n)\n\nSELECT\n    cursor_released.source_code,\n    cursor_released.cursor_timestamp,\n    cursor_released.cursor_process_id,\n\n    cursor_released.status,\n    cursor_released.active_execution_id,\n    cursor_released.lock_acquired_at,\n    cursor_released.lock_expires_at,\n\n    cursor_released.last_success_at,\n    cursor_released.records_processed,\n    cursor_released.metadata,\n\n    run_finished.id AS workflow_run_id,\n    run_finished.n8n_execution_id,\n\n    run_finished.started_at,\n    run_finished.finished_at,\n\n    run_finished.batches_processed,\n    run_finished.records_read,\n    run_finished.records_written,\n\n    run_finished.cursor_start_timestamp,\n    run_finished.cursor_start_process_id,\n\n    run_finished.cursor_end_timestamp,\n    run_finished.cursor_end_process_id,\n\n    run_finished.completion_reason\n\nFROM cursor_released\n\nLEFT JOIN run_finished\n    ON TRUE;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $json.completion_reason, $json.completion_reason, $execution.id, $execution.id, $json.completion_reason, $execution.id, $execution.id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1664,
+        304
+      ],
+      "id": "d214273a-6d69-47c0-a7ca-f9cd7b1effb4",
+      "name": "Finalizar WF-002 y liberar bloqueo",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs (\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n\n    cursor_start_timestamp,\n    cursor_start_process_id,\n\n    metadata,\n\n    created_at,\n    updated_at\n)\nVALUES (\n    'WF-002',\n    'SECOP_II_PROCESS_VERSIONS',\n    $1::TEXT,\n    $2::TEXT,\n    'running',\n    NOW(),\n\n    NULLIF(\n        $3::TEXT,\n        ''\n    )::TIMESTAMPTZ,\n\n    NULLIF(\n        $4::TEXT,\n        ''\n    ),\n\n    jsonb_build_object(\n        'workflow_name',\n        'WF-002 - Historial de cambios y versiones SECOP II',\n\n        'lock_acquired_at',\n        NULLIF(\n            $5::TEXT,\n            ''\n        )::TIMESTAMPTZ,\n\n        'lock_expires_at',\n        NULLIF(\n            $6::TEXT,\n            ''\n        )::TIMESTAMPTZ,\n\n        'purpose',\n        'Procesar versiones y generar eventos de cambios'\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (n8n_execution_id)\nDO UPDATE SET\n    status = 'running',\n    finished_at = NULL,\n    completion_reason = NULL,\n    error_node = NULL,\n    error_message = NULL,\n    updated_at = NOW()\n\nRETURNING\n    id,\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    cursor_start_timestamp,\n    cursor_start_process_id,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{ [ $execution.id, $execution.mode ?? \"unknown\", $json.cursor_timestamp ?? \"\", $json.cursor_process_id ?? \"\", $json.lock_acquired_at ?? \"\", $json.lock_expires_at ?? \"\" ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        496,
+        -176
+      ],
+      "id": "469aedde-3254-4383-8042-2a6852d03cd5",
+      "name": "Registrar inicio WF-002",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "requested_by_user_id"
+            },
+            {
+              "name": "process_id"
+            },
+            {
+              "name": "processing_mode"
+            },
+            {
+              "name": "orchestration_execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -592,
+        432
+      ],
+      "id": "c0000000-0000-4000-8000-002000000001",
+      "name": "Entrada desde WF-019"
+    }
+  ],
+  "connections": {
+    "Inicio Manual WF-002": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-002",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer cursor WF-002": {
+      "main": [
+        [
+          {
+            "node": "Leer versiones pendientes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer versiones pendientes": {
+      "main": [
+        [
+          {
+            "node": "¿Hay versiones nuevas?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay versiones nuevas?": {
+      "main": [
+        [
+          {
+            "node": "Clasificar cambio WF-002",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar cierre sin versiones WF-002",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar cambio WF-002": {
+      "main": [
+        [
+          {
+            "node": "Guardar evento de cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar evento de cambio": {
+      "main": [
+        [
+          {
+            "node": "Preparar avance cursor WF-002",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar avance cursor WF-002": {
+      "main": [
+        [
+          {
+            "node": "Actualizar cursor WF-002",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Actualizar cursor WF-002": {
+      "main": [
+        [
+          {
+            "node": "¿Hay otro lote WF-002?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay otro lote WF-002?": {
+      "main": [
+        [
+          {
+            "node": "Pausa entre lotes WF-002",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar cierre de sincronización WF-002",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pausa entre lotes WF-002": {
+      "main": [
+        [
+          {
+            "node": "Leer versiones pendientes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adquirir bloqueo WF-002": {
+      "main": [
+        [
+          {
+            "node": "¿Bloqueo WF-002 adquirido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Bloqueo WF-002 adquirido?": {
+      "main": [
+        [
+          {
+            "node": "Registrar inicio WF-002",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar ejecución omitida WF-002",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar cierre de sincronización WF-002": {
+      "main": [
+        [
+          {
+            "node": "Finalizar WF-002 y liberar bloqueo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar cierre sin versiones WF-002": {
+      "main": [
+        [
+          {
+            "node": "Finalizar WF-002 y liberar bloqueo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar inicio WF-002": {
+      "main": [
+        [
+          {
+            "node": "Leer cursor WF-002",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entrada desde WF-019": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-002",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "CernoIAProdWF007",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Bogota",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

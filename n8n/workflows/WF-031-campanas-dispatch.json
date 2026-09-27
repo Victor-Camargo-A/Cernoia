@@ -1,0 +1,96 @@
+{
+  "name": "[CernoIA PROD] WF-031 — Campañas comerciales del dueño",
+  "nodes": [
+    {
+      "id": "fd690f07-2ef5-4400-b191-293f70b94629",
+      "name": "Horario WF-031",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "9a44d4a4-27fb-4574-bf01-d0792eca61a0",
+      "name": "Procesar dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:4001/api/integrations/campaigns/dispatch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CernoIAProdWebhook",
+          "name": "CernoIA Webhook Secret"
+        }
+      }
+    },
+    {
+      "id": "5d0d8be5-9d9a-4588-bb80-a4fd1c3bc018",
+      "name": "Comprobar resultado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "jsCode": "if ($json.error || $json.failed > 0) throw new Error('La campaña requiere revisión en el panel del dueño: ' + ($json.error || $json.failed + ' intentos fallidos')); return [{json:$json}];"
+      }
+    }
+  ],
+  "connections": {
+    "Horario WF-031": {
+      "main": [
+        [
+          {
+            "node": "Procesar dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar dispatch": {
+      "main": [
+        [
+          {
+            "node": "Comprobar resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Bogota",
+    "executionTimeout": 120,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

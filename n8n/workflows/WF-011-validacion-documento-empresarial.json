@@ -1,0 +1,739 @@
+{
+  "id": "CernoIAProdWF011",
+  "name": "[CernoIA PROD] WF-011 — Validación de documento empresarial",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cernoia/wf-011",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -720,
+        0
+      ],
+      "id": "11000000-0000-4000-8000-000000000001",
+      "name": "Webhook seguro CernoIA WF-011",
+      "webhookId": "11000000-0000-4000-8000-000000000002",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CernoIAProdWebhook",
+          "name": "CernoIA Webhook Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first()?.json ?? {};\nconst input = raw.body && typeof raw.body === 'object' ? raw.body : raw;\nconst uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;\nif (!uuid.test(String(input.organization_id ?? '')) || !uuid.test(String(input.organization_document_id ?? ''))) throw new Error('Identificadores inválidos para WF-011');\nconst path = '/api/integrations/documents/' + String(input.organization_document_id) + '/file';\nconst downloadUrl = String(input.download_url ?? '');\nconst allowed = ['http://127.0.0.1:4001' + path, 'http://localhost:4001' + path, 'https://cernoia.secretbloom.tech' + path];\nif (!allowed.includes(downloadUrl)) throw new Error('URL de descarga no autorizada');\nreturn [{ json: { ...input, organization_id: String(input.organization_id), organization_document_id: String(input.organization_document_id), mime_type: String(input.mime_type ?? ''), download_url: 'http://127.0.0.1:4001' + path, n8n_execution_id: String($execution.id ?? '') } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        0
+      ],
+      "id": "11000000-0000-4000-8000-000000000003",
+      "name": "Validar solicitud WF-011"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE saas.organization_documents\nSET extraction_status = 'processing', verification_status = 'pending',\n    metadata = COALESCE(metadata, '{}'::JSONB) || jsonb_build_object('wf011_execution_id', $3::TEXT, 'wf011_started_at', NOW()), updated_at = NOW()\nWHERE id = $1::UUID AND organization_id = $2::UUID AND document_status <> 'deleted'\nRETURNING id AS organization_document_id, organization_id, document_type, document_name, original_filename, mime_type, $4::TEXT AS download_url;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.organization_document_id), String($json.organization_id), String($execution.id ?? ''), String($json.download_url) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -240,
+        0
+      ],
+      "id": "11000000-0000-4000-8000-000000000004",
+      "name": "Marcar documento en proceso WF-011",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "11000000-0000-4000-8000-000000000005",
+              "leftValue": "={{ $json.mime_type }}",
+              "rightValue": "application/pdf",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "11000000-0000-4000-8000-000000000006",
+      "name": "¿Es PDF extraíble?"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Marcar documento en proceso WF-011').first().json.download_url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        240,
+        -112
+      ],
+      "id": "11000000-0000-4000-8000-000000000007",
+      "name": "Descargar documento privado WF-011",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CernoIAProdWebhook",
+          "name": "CernoIA Webhook Secret"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        -112
+      ],
+      "id": "11000000-0000-4000-8000-000000000008",
+      "name": "Extraer texto PDF WF-011",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('Marcar documento en proceso WF-011').first().json; const text = String($json.text ?? $json.data ?? '').trim(); if (text.length < 20) throw new Error('El PDF no contiene texto suficiente; requiere OCR o revisión manual.'); return [{ json: { ...source, extracted_text: text.slice(0, 1000000), character_count: text.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -112
+      ],
+      "id": "11000000-0000-4000-8000-000000000009",
+      "name": "Normalizar extracción WF-011",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE saas.organization_documents\nSET extraction_status = 'success', extracted_text = $3::TEXT, verification_status = 'review_required',\n    ai_classification = COALESCE(ai_classification, '{}'::JSONB) || jsonb_build_object(\n      'declared_document_type', document_type, 'character_count', $4::INTEGER,\n      'classification_method', 'declared_type_and_pdf_text'),\n    metadata = COALESCE(metadata, '{}'::JSONB) || jsonb_build_object(\n      'wf011_text_extracted_at', NOW(), 'wf011_result', 'text_extracted'), updated_at = NOW()\nWHERE id = $1::UUID AND organization_id = $2::UUID\nRETURNING id AS organization_document_id, organization_id, document_type, document_name,\n          extraction_status, verification_status, extracted_text, issue_date, expiration_date,\n          policy_validity_days, alert_days_before, updated_at;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.organization_document_id), String($json.organization_id), String($json.extracted_text), Number($json.character_count ?? 0) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        960,
+        -112
+      ],
+      "id": "11000000-0000-4000-8000-000000000010",
+      "name": "Guardar extracción WF-011",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE saas.organization_documents\nSET extraction_status = 'not_requested', verification_status = 'review_required',\n    ai_classification = jsonb_build_object('document_type', document_type, 'classification_method', 'declared_type', 'automatic_text_extraction', FALSE),\n    metadata = COALESCE(metadata, '{}'::JSONB) || jsonb_build_object('wf011_finished_at', NOW(), 'wf011_result', 'manual_review_required', 'wf011_note', 'La extracción automática inicial admite PDF con texto.'), updated_at = NOW()\nWHERE id = $1::UUID AND organization_id = $2::UUID\nRETURNING id AS organization_document_id, extraction_status, verification_status, updated_at;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.organization_document_id), String($json.organization_id) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        112
+      ],
+      "id": "11000000-0000-4000-8000-000000000011",
+      "name": "Solicitar revisión manual WF-011",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE saas.organization_documents\nSET extraction_status = 'failed', verification_status = 'review_required',\n    metadata = COALESCE(metadata, '{}'::JSONB) || jsonb_build_object(\n      'wf011_finished_at', NOW(), 'wf011_result', 'extraction_failed', 'wf011_error', LEFT($3::TEXT, 2000),\n      'wf011_note', 'El archivo requiere OCR, conversión o revisión manual.'), updated_at = NOW()\nWHERE id = $1::UUID AND organization_id = $2::UUID\nRETURNING id AS organization_document_id, extraction_status, verification_status, updated_at;",
+        "options": {
+          "queryReplacement": "={{ [ String($('Marcar documento en proceso WF-011').first().json.organization_document_id), String($('Marcar documento en proceso WF-011').first().json.organization_id), String($json.error?.message ?? $json.message ?? 'No fue posible descargar o extraer texto del PDF') ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        720,
+        112
+      ],
+      "id": "11000000-0000-4000-8000-000000000014",
+      "name": "Registrar extracción fallida WF-011",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ...$json, workflow_code: 'WF-011', workflow_status: $json.extraction_status === 'failed' ? 'partial' : 'success', finished_at: new Date().toISOString() } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "id": "11000000-0000-4000-8000-000000000012",
+      "name": "Finalizar WF-011"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "CernoIAProdWF020",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/CernoIAProdWF020",
+          "cachedResultName": "[CernoIA PROD] WF-020 — Control de cuota Gemini con Redis"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "provider": "google",
+            "model_name": "={{ $json.model_name ?? $json.ai_requirement_model ?? 'models/gemini-3.1-flash-lite' }}",
+            "workflow_code": "WF-011",
+            "organization_id": "={{ $json.organization_id ?? '' }}",
+            "request_id": "={{ $json.analysis_id ?? $json.opportunity_document_id ?? $json.organization_document_id ?? $json.proposal_package_id ?? 'WF-011-' + $execution.id }}",
+            "payload_json": "={{ JSON.stringify($json) }}",
+            "rpm_limit": "={{ Number($json.gemini_rpm_limit ?? 0) }}",
+            "rpd_limit": "={{ Number($json.gemini_rpd_limit ?? 0) }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "provider",
+              "displayName": "provider",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "model_name",
+              "displayName": "model_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "workflow_code",
+              "displayName": "workflow_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "organization_id",
+              "displayName": "organization_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "request_id",
+              "displayName": "request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "payload_json",
+              "displayName": "payload_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "rpm_limit",
+              "displayName": "rpm_limit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "rpd_limit",
+              "displayName": "rpd_limit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1184,
+        -112
+      ],
+      "id": "011000000-0000-4000-8000-000000000020",
+      "name": "Reservar cuota Gemini WF-011",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "011000000-0000-4000-8000-000000001021",
+              "leftValue": "={{ $json.quota_granted === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1408,
+        -112
+      ],
+      "id": "011000000-0000-4000-8000-000000000021",
+      "name": "¿Cuota Gemini concedida WF-011?"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.1-flash-lite",
+        "options": {
+          "maxOutputTokens": 1200,
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        1600,
+        128
+      ],
+      "id": "01100000-0000-4000-8000-000000000022",
+      "name": "Gemini fechas documentales WF-011",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "ZfWqIHhxn1PfcxaP",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analiza este documento empresarial colombiano usando únicamente el texto suministrado.\n\nTipo declarado: {{ $json.document_type }}\nNombre: {{ $json.document_name }}\nTexto:\n{{ String($json.extracted_text ?? '').slice(0, 30000) }}",
+        "options": {
+          "systemMessage": "Extrae metadatos verificables de un documento empresarial colombiano. No inventes fechas ni datos. Devuelve solamente JSON válido con: detected_document_type, detected_organization_type, organization_type_confidence, issue_date, expiration_date, issuing_entity, document_number, confidence, evidence, warnings. detected_organization_type solo puede ser legal_entity, natural_person, consortium, temporary_union, nonprofit, other o unconfirmed. Las fechas deben ser YYYY-MM-DD o cadena vacía. confidence y organization_type_confidence deben estar entre 0 y 1. Si un dato no aparece explícitamente, usa cadena vacía o unconfirmed. No emitas concepto jurídico y no uses markdown.",
+          "maxIterations": 1,
+          "returnIntermediateSteps": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1632,
+        -208
+      ],
+      "id": "01100000-0000-4000-8000-000000000023",
+      "name": "Analizar identidad y fechas WF-011",
+      "retryOnFail": false,
+      "maxTries": 1,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Guardar extracción WF-011').item.json;\nconst raw = $json.output ?? $json.text ?? $json.response ?? '';\nlet parsed = {};\ntry {\n  if (raw && typeof raw === 'object') parsed = raw;\n  else {\n    const text = String(raw ?? '').replace(/^\\s*```(?:json)?/i, '').replace(/```\\s*$/i, '').trim();\n    const start = text.indexOf('{'); const end = text.lastIndexOf('}');\n    parsed = JSON.parse(start >= 0 && end > start ? text.slice(start, end + 1) : text);\n  }\n} catch { parsed = {}; }\nconst isoDate = (value) => {\n  const text = String(value ?? '').trim();\n  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(text)) return '';\n  const date = new Date(text + 'T00:00:00Z');\n  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === text ? text : '';\n};\nconst confidence = Math.max(0, Math.min(1, Number(parsed.confidence ?? 0) || 0));\nconst allowedOrganizationTypes = new Set(['legal_entity', 'natural_person', 'consortium', 'temporary_union', 'nonprofit', 'other']);\nconst rawOrganizationType = String(parsed.detected_organization_type ?? '').trim().toLowerCase();\nconst detectedOrganizationType = allowedOrganizationTypes.has(rawOrganizationType) ? rawOrganizationType : 'unconfirmed';\nconst organizationTypeConfidence = Math.max(0, Math.min(1, Number(parsed.organization_type_confidence ?? 0) || 0));\nlet issueDate = isoDate(parsed.issue_date);\nlet expirationDate = isoDate(parsed.expiration_date);\nif (issueDate && new Date(issueDate + 'T00:00:00Z').getTime() > Date.now() + 7 * 86400000) issueDate = '';\nif (issueDate && expirationDate && expirationDate < issueDate) expirationDate = '';\nif (!expirationDate && issueDate && Number(context.policy_validity_days) > 0) {\n  const calculated = new Date(issueDate + 'T00:00:00Z');\n  calculated.setUTCDate(calculated.getUTCDate() + Number(context.policy_validity_days));\n  expirationDate = calculated.toISOString().slice(0, 10);\n}\nconst classification = {\n  detected_document_type: String(parsed.detected_document_type ?? '').slice(0, 120),\n  detected_organization_type: organizationTypeConfidence >= 0.75 ? detectedOrganizationType : 'unconfirmed',\n  organization_type_confidence: organizationTypeConfidence,\n  issue_date: issueDate || null, expiration_date: expirationDate || null,\n  issuing_entity: String(parsed.issuing_entity ?? '').slice(0, 240),\n  document_number: String(parsed.document_number ?? '').slice(0, 160), confidence,\n  evidence: String(parsed.evidence ?? '').slice(0, 500),\n  warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map(String).slice(0, 10) : [],\n  source: 'gemini_guarded_by_wf020', reviewed_by_human: false\n};\nreturn [{ json: { ...context, detected_issue_date: confidence >= 0.75 ? issueDate : '',\n  detected_expiration_date: confidence >= 0.75 ? expirationDate : '', confidence,\n  classification, ai_response_valid: Boolean(Object.keys(parsed).length) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1856,
+        -208
+      ],
+      "id": "011000000-0000-4000-8000-000000000024",
+      "name": "Normalizar fechas documentales WF-011"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE saas.organization_documents\nSET issue_date = COALESCE(issue_date, NULLIF($3, '')::DATE),\n    expiration_date = COALESCE(expiration_date, NULLIF($4, '')::DATE),\n    renewal_due_date = COALESCE(expiration_date, NULLIF($4, '')::DATE),\n    alert_due_date = CASE\n      WHEN COALESCE(expiration_date, NULLIF($4, '')::DATE) IS NULL THEN alert_due_date\n      ELSE COALESCE(expiration_date, NULLIF($4, '')::DATE) - COALESCE(alert_days_before, 5)\n    END,\n    ai_classification = COALESCE(ai_classification, '{}'::JSONB) || $5::JSONB,\n    verification_status = 'review_required',\n    metadata = COALESCE(metadata, '{}'::JSONB) || jsonb_build_object(\n      'wf011_ai_classified_at', NOW(), 'wf011_ai_confidence', $6::NUMERIC,\n      'date_source', CASE WHEN NULLIF($3, '') IS NULL AND NULLIF($4, '') IS NULL THEN 'not_detected' ELSE 'ai_pending_human_review' END),\n    updated_at = NOW()\nWHERE id = $1::UUID AND organization_id = $2::UUID\nRETURNING id AS organization_document_id, organization_id, document_type, document_name,\n          issue_date, expiration_date, alert_due_date, extraction_status, verification_status, updated_at;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.organization_document_id), String($json.organization_id), String($json.detected_issue_date ?? ''), String($json.detected_expiration_date ?? ''), JSON.stringify($json.classification ?? {}), Number($json.confidence ?? 0) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2080,
+        -208
+      ],
+      "id": "011000000-0000-4000-8000-000000000025",
+      "name": "Guardar clasificación y fechas WF-011",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE saas.organization_documents\nSET verification_status = 'review_required',\n    metadata = COALESCE(metadata, '{}'::JSONB) || jsonb_build_object(\n      'wf011_ai_deferred_at', NOW(), 'wf011_ai_reason', $3::TEXT), updated_at = NOW()\nWHERE id = $1::UUID AND organization_id = $2::UUID\nRETURNING id AS organization_document_id, organization_id, extraction_status, verification_status, updated_at;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.organization_document_id ?? ''), String($json.organization_id ?? ''), String($json.quota_reason ?? $json.error?.message ?? 'model_unavailable') ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1856,
+        16
+      ],
+      "id": "011000000-0000-4000-8000-000000000026",
+      "name": "Registrar IA documental diferida WF-011",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook seguro CernoIA WF-011": {
+      "main": [
+        [
+          {
+            "node": "Validar solicitud WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar solicitud WF-011": {
+      "main": [
+        [
+          {
+            "node": "Marcar documento en proceso WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar documento en proceso WF-011": {
+      "main": [
+        [
+          {
+            "node": "¿Es PDF extraíble?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es PDF extraíble?": {
+      "main": [
+        [
+          {
+            "node": "Descargar documento privado WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Solicitar revisión manual WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar documento privado WF-011": {
+      "main": [
+        [
+          {
+            "node": "Extraer texto PDF WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar extracción fallida WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer texto PDF WF-011": {
+      "main": [
+        [
+          {
+            "node": "Normalizar extracción WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar extracción fallida WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar extracción WF-011": {
+      "main": [
+        [
+          {
+            "node": "Guardar extracción WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar extracción fallida WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar extracción WF-011": {
+      "main": [
+        [
+          {
+            "node": "Reservar cuota Gemini WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Solicitar revisión manual WF-011": {
+      "main": [
+        [
+          {
+            "node": "Finalizar WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar extracción fallida WF-011": {
+      "main": [
+        [
+          {
+            "node": "Finalizar WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reservar cuota Gemini WF-011": {
+      "main": [
+        [
+          {
+            "node": "¿Cuota Gemini concedida WF-011?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Cuota Gemini concedida WF-011?": {
+      "main": [
+        [
+          {
+            "node": "Analizar identidad y fechas WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar IA documental diferida WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini fechas documentales WF-011": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Analizar identidad y fechas WF-011",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analizar identidad y fechas WF-011": {
+      "main": [
+        [
+          {
+            "node": "Normalizar fechas documentales WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar IA documental diferida WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar fechas documentales WF-011": {
+      "main": [
+        [
+          {
+            "node": "Guardar clasificación y fechas WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar clasificación y fechas WF-011": {
+      "main": [
+        [
+          {
+            "node": "Finalizar WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar IA documental diferida WF-011": {
+      "main": [
+        [
+          {
+            "node": "Finalizar WF-011",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Bogota",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "CernoIAProdWF007",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

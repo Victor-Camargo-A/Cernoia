@@ -1,0 +1,13 @@
+import { pageMetadata } from "@/lib/seo";
+import { PublicSite, PageHeading, ClosingCTA } from "@/app/components/public-site";
+export const metadata = pageMetadata("/preguntas-frecuentes", "CernoIA: membresía, acceso y preguntas frecuentes", "Resuelve tus dudas sobre CernoIA: oportunidades SECOP, análisis con IA, acceso para tu empresa, membresía y pagos. Conoce cómo empezar.");
+export default function Page() { return <PublicSite><PageHeading label="Preguntas frecuentes" title="Respuestas antes de empezar.">Conoce el alcance de la plataforma, el acceso de tu equipo y el proceso de pago.</PageHeading><section className="mx-auto max-w-4xl space-y-4 px-6 pb-12">{[
+["¿Para quién está diseñada CernoIA?", "Para empresas y equipos que exploran contratación pública en Colombia y necesitan reunir oportunidades, requisitos y documentación en un mismo espacio."],
+["¿Cómo obtengo acceso?", "El administrador da de alta la organización e invita a sus integrantes. Si tu empresa aún no tiene cuenta, solicita la membresía desde la página de planes. Si ya tiene cuenta, pide una invitación a su administrador y entra desde la página de acceso."],
+["¿CernoIA pertenece a SECOP?", "No. Es una plataforma privada e independiente. Consulta siempre los documentos, fechas y condiciones vigentes del proceso en la fuente oficial."],
+["¿La IA decide o presenta propuestas por mí?", "No. Apoya el análisis y la preparación de borradores. Tu equipo revisa los resultados y conserva la responsabilidad de aprobar y presentar la propuesta."],
+["¿Cómo se confirma un pago?", "Realizas el pago en Bold y CernoIA actualiza tu suscripción cuando recibe y verifica la confirmación. Volver a la plataforma desde Bold no equivale por sí solo a un pago aprobado."],
+["¿Mi tarjeta se cobra automáticamente cada mes?", "No. La renovación actual se realiza con un enlace de pago. El propietario o administrador puede generarlo siete días antes del vencimiento desde Plan y pagos."],
+["¿Puedo recibir avisos por correo o WhatsApp?", "La plataforma dispone de integración de canales. El envío requiere que el servicio correspondiente esté configurado y que el destino esté verificado. Consulta el estado dentro de tu organización."],
+["¿Qué pasa con mis documentos?", "Se gestionan dentro del espacio de tu organización, con acceso autenticado y permisos por rol. Revisa los datos extraídos antes de utilizarlos en una plantilla o propuesta."]
+].map(([q,a])=><details key={q} className="rounded-2xl border border-[#dce4e3] bg-white px-6 py-5"><summary className="cursor-pointer text-lg font-semibold">{q}</summary><p className="mt-4 leading-7 text-slate-600">{a}</p></details>)}</section><ClosingCTA /></PublicSite>; }

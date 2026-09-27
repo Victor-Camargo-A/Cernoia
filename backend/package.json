@@ -1,0 +1,43 @@
+{
+  "name": "cernoia-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "migrate": "node scripts/migrate.js",
+    "list-organizations": "node scripts/list-organizations.js",
+    "create-organization": "node scripts/create-organization.js",
+    "create-admin": "node scripts/create-admin.js",
+    "create-platform-admin": "node scripts/create-platform-admin.js",
+    "readiness": "node scripts/check-readiness.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "archiver": "^8.0.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "docxtemplater": "^3.69.3",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "imapflow": "2.0.5",
+    "ioredis": "^6.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "mailparser": "3.9.28",
+    "mammoth": "^1.12.2",
+    "nodemailer": "^10.0.1",
+    "otpauth": "^9.5.2",
+    "pdf-lib": "^1.17.1",
+    "pdfkit": "^0.17.2",
+    "pg": "^8.16.3",
+    "pizzip": "^3.2.0",
+    "qrcode": "^1.5.4",
+    "tesseract.js": "^7.0.0"
+  }
+}

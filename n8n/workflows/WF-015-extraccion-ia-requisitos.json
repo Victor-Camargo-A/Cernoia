@@ -1,0 +1,1007 @@
+{
+  "id": "CernoIAProdWF015",
+  "name": "[CernoIA PROD] WF-015 — Extracción IA de requisitos documentales",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        16,
+        -224
+      ],
+      "id": "dd6f4fbe-9e59-4e06-a550-91213817eae9",
+      "name": "Inicio Manual WF-015"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0ebad239-39cc-4e23-b722-c82a1cdc782a",
+              "name": "processing_mode",
+              "value": "={{ $json.processing_mode ?? 'all' }}",
+              "type": "string"
+            },
+            {
+              "id": "d6275581-1319-45ea-ad7c-3ee01d5e9b19",
+              "name": "max_documents",
+              "value": "={{ $json.max_documents ?? 2 }}",
+              "type": "number"
+            },
+            {
+              "id": "0fe0ebda-2398-4732-850b-67a4d9a225c6",
+              "name": "minimum_characters",
+              "value": "={{ $json.minimum_characters ?? 100 }}",
+              "type": "number"
+            },
+            {
+              "id": "6f9fa29b-5282-41d2-a3ea-4fa2e2432403",
+              "name": "model_name",
+              "value": "={{ $json.model_name ?? 'models/gemini-3.1-flash-lite' }}",
+              "type": "string"
+            },
+            {
+              "id": "0ebc3e7b-f268-4928-a2af-79a89098ca2a",
+              "name": "prompt_version",
+              "value": "={{ $json.prompt_version ?? 2 }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {},
+        "includeOtherFields": true
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        192,
+        -112
+      ],
+      "id": "f7cb6594-448b-406a-83d8-7b2ff9e6d865",
+      "name": "Configurar procesamiento WF-015"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH active_lock AS (\n    SELECT\n        cursor.active_execution_id,\n        cursor.status,\n        cursor.lock_expires_at\n\n    FROM ops.sync_cursors AS cursor\n\n    WHERE cursor.source_code =\n          'SECOP_OPPORTUNITY_REQUIREMENT_EXTRACTION'\n\n    LIMIT 1\n),\n\nrecovered AS (\n    UPDATE saas.opportunity_documents\n        AS document\n\n    SET\n        ai_requirement_status =\n            'queued',\n\n        ai_requirement_started_at =\n            NULL,\n\n        ai_requirement_finished_at =\n            NULL,\n\n        ai_requirement_error =\n            'Análisis de requisitos recuperado después de permanecer bloqueado.',\n\n        ai_requirement_attempt_count =\n            GREATEST(\n                COALESCE(\n                    document.ai_requirement_attempt_count,\n                    0\n                ) - 1,\n                0\n            ),\n\n        metadata =\n            (\n                COALESCE(\n                    document.metadata,\n                    '{}'::JSONB\n                )\n                - 'active_requirement_execution_id'\n                - 'active_requirement_started_at'\n            )\n            || jsonb_build_object(\n                'requirement_recovered_at',\n                NOW(),\n\n                'requirement_recovered_by',\n                'WF-015'\n            ),\n\n        updated_at =\n            NOW()\n\n    WHERE document.ai_requirement_status =\n          'running'\n\n      AND COALESCE(\n          document.ai_requirement_started_at,\n          document.updated_at\n      ) <\n          NOW() - INTERVAL '45 minutes'\n\n      AND NOT EXISTS (\n          SELECT 1\n\n          FROM active_lock AS lock\n\n          WHERE lock.status =\n                'running'\n\n            AND lock.lock_expires_at >\n                NOW()\n\n            AND lock.active_execution_id =\n                COALESCE(\n                    document.metadata\n                        ->> 'active_requirement_execution_id',\n                    ''\n                )\n      )\n\n    RETURNING\n        document.id,\n        document.process_reference,\n        document.document_name\n)\n\nSELECT\n    COUNT(*)\n        AS recovered_documents,\n\n    COALESCE(\n        JSONB_AGG(\n            jsonb_build_object(\n                'opportunity_document_id',\n                recovered.id,\n\n                'process_reference',\n                recovered.process_reference,\n\n                'document_name',\n                recovered.document_name\n            )\n        ) FILTER (\n            WHERE recovered.id IS NOT NULL\n        ),\n        '[]'::JSONB\n    ) AS recovered_items,\n\n    CASE\n        WHEN COUNT(*) = 0\n            THEN 'no_stale_documents'\n\n        ELSE 'stale_documents_recovered'\n    END AS recovery_status\n\nFROM recovered;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        400,
+        0
+      ],
+      "id": "d8dbfaf3-d259-4b6f-a065-117a422b2122",
+      "name": "Recuperar análisis IA bloqueados WF-015",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS (\n    SELECT\n        NULLIF(\n            $1::TEXT,\n            ''\n        ) AS execution_id,\n\n        COALESCE(\n            NULLIF(\n                $2::TEXT,\n                ''\n            ),\n            'all'\n        ) AS processing_mode,\n\n        GREATEST(\n            COALESCE(\n                NULLIF(\n                    $3::TEXT,\n                    ''\n                )::INTEGER,\n                2\n            ),\n            1\n        ) AS max_documents\n),\n\nlock_acquired AS (\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'running',\n\n        active_execution_id =\n            parameters.execution_id,\n\n        lock_acquired_at =\n            NOW(),\n\n        lock_expires_at =\n            NOW() + INTERVAL '60 minutes',\n\n        error_message =\n            NULL,\n\n        metadata =\n            COALESCE(\n                cursor.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'active_workflow',\n                'WF-015',\n\n                'active_execution_id',\n                parameters.execution_id,\n\n                'processing_mode',\n                parameters.processing_mode,\n\n                'max_documents',\n                parameters.max_documents,\n\n                'started_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM parameters\n\n    WHERE cursor.source_code =\n          'SECOP_OPPORTUNITY_REQUIREMENT_EXTRACTION'\n\n      AND (\n          cursor.status IS DISTINCT FROM\n              'running'\n\n          OR cursor.lock_expires_at IS NULL\n\n          OR cursor.lock_expires_at <\n             NOW()\n\n          OR cursor.active_execution_id =\n             parameters.execution_id\n      )\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at\n)\n\nSELECT\n    EXISTS (\n        SELECT 1\n        FROM lock_acquired\n    ) AS lock_acquired,\n\n    COALESCE(\n        (\n            SELECT source_code\n            FROM lock_acquired\n            LIMIT 1\n        ),\n        'SECOP_OPPORTUNITY_REQUIREMENT_EXTRACTION'\n    ) AS source_code,\n\n    (\n        SELECT status\n        FROM lock_acquired\n        LIMIT 1\n    ) AS status,\n\n    (\n        SELECT active_execution_id\n        FROM lock_acquired\n        LIMIT 1\n    ) AS active_execution_id,\n\n    (\n        SELECT lock_expires_at\n        FROM lock_acquired\n        LIMIT 1\n    ) AS lock_expires_at;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String($execution.id ?? \"\"),\n\n  String(\n    $(\"Configurar procesamiento WF-015\")\n      .first()\n      .json\n      .processing_mode\n    ?? \"all\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-015\")\n      .first()\n      .json\n      .max_documents\n    ?? 2\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        624,
+        0
+      ],
+      "id": "184d53b7-391e-4461-a1d9-dad682e92435",
+      "name": "Adquirir bloqueo WF-015",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d37f7162-d431-4150-9f59-d9953c1bc8f3",
+              "leftValue": "={{ String($json.lock_acquired ?? '').trim().toLowerCase() === 'true' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        400,
+        -224
+      ],
+      "id": "9b4998ae-2de2-4f6f-b389-3b9d2b580810",
+      "name": "¿Bloqueo adquirido WF-015?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH configuration AS (\n    SELECT\n        GREATEST(\n            COALESCE(\n                NULLIF(\n                    $1::TEXT,\n                    ''\n                )::INTEGER,\n                2\n            ),\n            1\n        )\n            AS max_documents,\n\n        CASE\n            WHEN LOWER(\n                COALESCE(\n                    NULLIF(\n                        BTRIM(\n                            $2::TEXT\n                        ),\n                        ''\n                    ),\n                    'all'\n                )\n            ) IN (\n                'all',\n                'pending_only',\n                'outdated_only'\n            )\n                THEN LOWER(\n                    COALESCE(\n                        NULLIF(\n                            BTRIM(\n                                $2::TEXT\n                            ),\n                            ''\n                        ),\n                        'all'\n                    )\n                )\n\n            ELSE\n                'all'\n        END\n            AS processing_mode,\n\n        GREATEST(\n            COALESCE(\n                NULLIF(\n                    $3::TEXT,\n                    ''\n                )::INTEGER,\n                100\n            ),\n            100\n        )\n            AS minimum_characters,\n\n        NULLIF(\n            $4::TEXT,\n            ''\n        )\n            AS execution_id,\n\n        COALESCE(\n            NULLIF(\n                BTRIM(\n                    $5::TEXT\n                ),\n                ''\n            ),\n            'models/gemini-3.1-flash-lite'\n        )\n            AS model_name,\n\n        GREATEST(\n            COALESCE(\n                NULLIF(\n                    $6::TEXT,\n                    ''\n                )::INTEGER,\n                2\n            ),\n            1\n        )\n            AS prompt_version\n),\n\ncandidates AS (\n    SELECT\n        document.id\n            AS opportunity_document_id,\n\n        document.organization_id,\n        document.opportunity_analysis_id,\n        document.process_id,\n\n        document.process_reference,\n        document.document_name,\n        document.primary_category,\n\n        document.ai_requirement_status\n            AS previous_requirement_status,\n\n        COALESCE(\n            document.ai_requirement_attempt_count,\n            0\n        )\n            AS previous_attempt_count,\n\n        COALESCE(\n            document.ai_requirement_prompt_version,\n            0\n        )\n            AS previous_prompt_version,\n\n        CASE\n            WHEN document.ai_requirement_status =\n                 'completed'\n\n             AND COALESCE(\n                 document.ai_requirement_prompt_version,\n                 0\n             ) < configuration.prompt_version\n                THEN 'prompt_version_upgrade'\n\n            WHEN document.ai_requirement_status =\n                 'failed'\n                THEN 'retry_failed'\n\n            ELSE\n                'queued_document'\n        END\n            AS claim_reason,\n\n        extraction.id\n            AS extraction_id,\n\n        extraction.extraction_version,\n        extraction.text_content,\n        extraction.character_count,\n        extraction.page_count,\n        extraction.text_sha256,\n\n        configuration.execution_id,\n        configuration.model_name,\n        configuration.prompt_version,\n        configuration.processing_mode\n\n    FROM saas.opportunity_documents\n        AS document\n\n    CROSS JOIN configuration\n\n    JOIN LATERAL (\n        SELECT\n            saved.id,\n            saved.extraction_version,\n            saved.text_content,\n            saved.character_count,\n            saved.page_count,\n            saved.text_sha256\n\n        FROM saas.opportunity_document_extractions\n            AS saved\n\n        WHERE saved.opportunity_document_id =\n              document.id\n\n          AND saved.extraction_status =\n              'extracted'\n\n        ORDER BY\n            saved.extraction_version DESC,\n            saved.updated_at DESC\n\n        LIMIT 1\n    )\n        AS extraction\n        ON TRUE\n\n    WHERE document.download_status =\n          'downloaded'\n\n      AND document.extraction_status =\n          'extracted'\n\n      AND extraction.character_count >=\n          configuration.minimum_characters\n\n      AND (\n          /*\n           * Documentos pendientes o fallidos.\n           */\n          (\n              configuration.processing_mode IN (\n                  'all',\n                  'pending_only'\n              )\n\n              AND document.ai_requirement_status IN (\n                  'queued',\n                  'failed'\n              )\n\n              AND COALESCE(\n                  document.ai_requirement_attempt_count,\n                  0\n              ) < 3\n          )\n\n          OR\n\n          /*\n           * Documentos completados con una versión\n           * anterior del prompt.\n           */\n          (\n              configuration.processing_mode IN (\n                  'all',\n                  'outdated_only'\n              )\n\n              AND document.ai_requirement_status =\n                  'completed'\n\n              AND COALESCE(\n                  document.ai_requirement_prompt_version,\n                  0\n              ) < configuration.prompt_version\n          )\n      )\n\n    ORDER BY\n        /*\n         * Si se solicita exclusivamente actualización,\n         * únicamente existirán documentos desactualizados.\n         *\n         * En modo general se priorizan:\n         * 1. Documentos nuevos.\n         * 2. Documentos con prompt antiguo.\n         * 3. Reintentos fallidos.\n         */\n        CASE\n            WHEN document.ai_requirement_status =\n                 'queued'\n                THEN 1\n\n            WHEN document.ai_requirement_status =\n                 'completed'\n\n             AND COALESCE(\n                 document.ai_requirement_prompt_version,\n                 0\n             ) < configuration.prompt_version\n                THEN 2\n\n            WHEN document.ai_requirement_status =\n                 'failed'\n                THEN 3\n\n            ELSE 4\n        END,\n\n        CASE document.primary_category\n            WHEN 'invitation_or_terms' THEN 1\n            WHEN 'previous_studies' THEN 2\n            WHEN 'entity_template' THEN 3\n            WHEN 'technical_annex' THEN 4\n            WHEN 'risk_matrix' THEN 5\n            ELSE 6\n        END,\n\n        document.updated_at ASC\n\n    LIMIT (\n        SELECT\n            max_documents\n\n        FROM configuration\n    )\n\n    FOR UPDATE OF document\n    SKIP LOCKED\n),\n\nclaimed AS (\n    UPDATE saas.opportunity_documents\n        AS document\n\n    SET\n        ai_requirement_status =\n            'running',\n\n        /*\n         * Cuando cambia la versión del prompt,\n         * se reinicia el contador de intentos.\n         *\n         * Cuando es un reintento de la misma\n         * versión, se incrementa normalmente.\n         */\n        ai_requirement_attempt_count =\n            CASE\n                WHEN candidate.previous_prompt_version <\n                     candidate.prompt_version\n                    THEN 1\n\n                ELSE COALESCE(\n                    document.ai_requirement_attempt_count,\n                    0\n                ) + 1\n            END,\n\n        ai_requirement_started_at =\n            NOW(),\n\n        ai_requirement_finished_at =\n            NULL,\n\n        ai_requirement_error =\n            NULL,\n\n        ai_requirement_model =\n            candidate.model_name,\n\n        ai_requirement_prompt_version =\n            candidate.prompt_version,\n\n        metadata =\n            COALESCE(\n                document.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'active_requirement_execution_id',\n                candidate.execution_id,\n\n                'active_requirement_started_at',\n                NOW(),\n\n                'active_requirement_processing_mode',\n                candidate.processing_mode,\n\n                'active_requirement_claim_reason',\n                candidate.claim_reason,\n\n                'previous_requirement_status',\n                candidate.previous_requirement_status,\n\n                'previous_requirement_attempt_count',\n                candidate.previous_attempt_count,\n\n                'previous_requirement_prompt_version',\n                candidate.previous_prompt_version,\n\n                'target_requirement_prompt_version',\n                candidate.prompt_version,\n\n                'requirement_reanalysis',\n                (\n                    candidate.claim_reason =\n                    'prompt_version_upgrade'\n                )\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM candidates\n        AS candidate\n\n    WHERE document.id =\n          candidate.opportunity_document_id\n\n    RETURNING\n        document.id\n            AS opportunity_document_id,\n\n        document.organization_id,\n        document.opportunity_analysis_id,\n        document.process_id,\n\n        document.process_reference,\n        document.document_name,\n        document.primary_category,\n\n        candidate.extraction_id,\n        candidate.extraction_version,\n        candidate.text_content,\n        candidate.character_count,\n        candidate.page_count,\n        candidate.text_sha256,\n\n        document.ai_requirement_attempt_count,\n        document.ai_requirement_model,\n        document.ai_requirement_prompt_version,\n\n        candidate.previous_requirement_status,\n        candidate.previous_attempt_count,\n        candidate.previous_prompt_version,\n        candidate.claim_reason,\n        candidate.processing_mode\n)\n\nSELECT\n    claimed.opportunity_document_id,\n    claimed.organization_id,\n    claimed.opportunity_analysis_id,\n    claimed.process_id,\n\n    claimed.process_reference,\n    claimed.document_name,\n    claimed.primary_category,\n\n    claimed.extraction_id,\n    claimed.extraction_version,\n    claimed.text_content,\n    claimed.character_count,\n    claimed.page_count,\n    claimed.text_sha256,\n\n    claimed.ai_requirement_attempt_count,\n    claimed.ai_requirement_model,\n    claimed.ai_requirement_prompt_version,\n\n    claimed.previous_requirement_status,\n    claimed.previous_attempt_count,\n    claimed.previous_prompt_version,\n    claimed.claim_reason,\n    claimed.processing_mode\n\nFROM claimed;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $(\"Configurar procesamiento WF-015\")\n      .first()\n      .json\n      .max_documents\n    ?? 2\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-015\")\n      .first()\n      .json\n      .processing_mode\n    ?? \"all\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-015\")\n      .first()\n      .json\n      .minimum_characters\n    ?? 100\n  ),\n\n  String(\n    $execution.id\n    ?? \"\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-015\")\n      .first()\n      .json\n      .model_name\n    ?? \"models/gemini-3.1-flash-lite\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-015\")\n      .first()\n      .json\n      .prompt_version\n    ?? 2\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        848,
+        -368
+      ],
+      "id": "ffad8a91-3c47-4535-9681-14a0e15f71c3",
+      "name": "Tomar lote documental WF-015",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7b0d9009-09f0-46f7-acee-285c7bfc5611",
+              "leftValue": "={{ Boolean($json.opportunity_document_id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        400,
+        -528
+      ],
+      "id": "e518517b-194b-45dc-8d03-cfa9158953ea",
+      "name": "¿Hay documentos para analizar WF-015?"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        848,
+        -688
+      ],
+      "id": "414b0c32-38d4-4f99-b65c-9daf1af681e2",
+      "name": "Procesar documentos uno a uno WF-015"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS (\n    SELECT\n        NULLIF(\n            $1::TEXT,\n            ''\n        ) AS execution_id\n),\n\nreleased AS (\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        status =\n            'success',\n\n        active_execution_id =\n            NULL,\n\n        lock_acquired_at =\n            NULL,\n\n        lock_expires_at =\n            NULL,\n\n        error_message =\n            NULL,\n\n        metadata =\n            COALESCE(\n                cursor.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'last_successful_workflow',\n                'WF-015',\n\n                'last_successful_execution_id',\n                parameters.execution_id,\n\n                'last_successful_finished_at',\n                NOW(),\n\n                'lock_released_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM parameters\n\n    WHERE cursor.source_code =\n          'SECOP_OPPORTUNITY_REQUIREMENT_EXTRACTION'\n\n      AND cursor.active_execution_id =\n          parameters.execution_id\n\n    RETURNING\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n        cursor.error_message,\n        cursor.updated_at\n),\n\ncurrent_state AS (\n    SELECT\n        cursor.source_code,\n        cursor.status,\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n        cursor.error_message,\n        cursor.updated_at\n\n    FROM ops.sync_cursors\n        AS cursor\n\n    WHERE cursor.source_code =\n          'SECOP_OPPORTUNITY_REQUIREMENT_EXTRACTION'\n\n    LIMIT 1\n)\n\nSELECT\n    TRUE\n        AS lock_released,\n\n    released.source_code,\n    released.status,\n    released.active_execution_id,\n    released.lock_acquired_at,\n    released.lock_expires_at,\n    released.error_message,\n    released.updated_at,\n\n    'lock_released'\n        AS release_result\n\nFROM released\n\nUNION ALL\n\nSELECT\n    FALSE\n        AS lock_released,\n\n    state.source_code,\n    state.status,\n    state.active_execution_id,\n    state.lock_acquired_at,\n    state.lock_expires_at,\n    state.error_message,\n    state.updated_at,\n\n    CASE\n        WHEN state.active_execution_id\n             IS NULL\n\n         AND state.status IN (\n             'idle',\n             'success'\n         )\n            THEN 'already_released'\n\n        ELSE 'lock_owned_by_another_execution'\n    END AS release_result\n\nFROM current_state\n    AS state\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM released\n);",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $execution.id ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        864,
+        -512
+      ],
+      "id": "5726942f-119c-4888-9c4e-ca1fe1f64a25",
+      "name": "Liberar bloqueo WF-015",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const cleanText = (value) =>\n  String(value ?? '')\n    .replace(/\\u0000/g, '')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/\\n{4,}/g, '\\n\\n\\n')\n    .trim();\n\nconst fullText = cleanText(\n  $json.text_content\n);\n\nif (fullText.length < 100) {\n  throw new Error(\n    'El documento no contiene texto suficiente para analizar requisitos.'\n  );\n}\n\n/*\n * Versión 2 del análisis documental.\n *\n * Se analizan hasta 70.000 caracteres:\n * - 55.000 caracteres iniciales.\n * - 15.000 caracteres finales.\n *\n * En una versión posterior se implementará\n * fragmentación completa de documentos extensos.\n */\nlet documentText =\n  fullText;\n\nif (fullText.length > 70000) {\n  const beginning =\n    fullText.slice(\n      0,\n      55000\n    );\n\n  const ending =\n    fullText.slice(\n      -15000\n    );\n\n  documentText =\n    `${beginning}\\n\\n`\n    + '[... CONTENIDO INTERMEDIO OMITIDO EN ESTA EJECUCIÓN ...]'\n    + `\\n\\n${ending}`;\n}\n\nconst systemPrompt = `\nActúa como especialista senior en contratación pública colombiana y análisis documental de procesos SECOP II.\n\nTu tarea es identificar exclusivamente requisitos documentales, jurídicos, tributarios, fiscales, disciplinarios, financieros, técnicos, administrativos, de experiencia, seguridad social y formatos que una persona natural, persona jurídica, consorcio, unión temporal, representante legal, contador, revisor fiscal, integrante del equipo de trabajo u otro sujeto deba presentar, acreditar, diligenciar, firmar, anexar o mantener vigente.\n\nREGLAS OBLIGATORIAS\n\n1. No inventes requisitos.\n\n2. No confundas las características técnicas del objeto contractual, las obligaciones del contratista, las especificaciones de bienes o servicios ni las condiciones de ejecución con documentos exigidos a un participante.\n\n3. Cada requisito debe estar respaldado por texto presente en el documento.\n\n4. No agregues un requisito cuando no exista evidence_text que lo respalde.\n\n5. evidence_text debe ser un fragmento breve, preciso y no superar 450 caracteres.\n\n6. Identifica si el requisito es obligatorio o condicional.\n\n7. Cuando el texto utilice expresiones como:\n\n- \"si\"\n- \"cuando\"\n- \"en caso de\"\n- \"cuando aplique\"\n- \"si aplica\"\n- \"de ser necesario\"\n- \"en el evento de\"\n- \"para cuando\"\n- \"cuando corresponda\"\n\no expresiones equivalentes, debes marcar:\n\n\"mandatory\": false\n\ny debes explicar la condición en:\n\n\"condition_text\"\n\n8. Cuando el requisito sea exigido siempre y sin condición expresa, utiliza:\n\n\"mandatory\": true\n\n9. Identifica la vigencia máxima del documento solamente cuando aparezca expresamente en el texto.\n\n10. Cuando maximum_age_days no aparezca expresamente, devuelve:\n\n\"maximum_age_days\": 0\n\n11. No deduzcas vigencias usando conocimientos externos o políticas internas de la empresa.\n\n12. Identifica si el documento necesita:\n\n- firma\n- formato o plantilla de la entidad\n- documento original\n- autenticación o notarización\n- traducción\n\n13. Cuando una oración exija dos o más documentos independientes, crea un requisito separado para cada documento.\n\n14. No agrupes documentos diferentes en un solo requisito.\n\nEjemplo:\n\nSi el texto exige una planilla pagada de seguridad social y una certificación firmada por el revisor fiscal, debes crear dos requisitos diferentes.\n\n15. Identifica la etapa en la que se exige cada requisito.\n\nLos únicos valores permitidos para requirement_stage son:\n\n- bid_submission\n- eligibility\n- evaluation\n- award\n- contract_signing\n- contract_execution\n- payment\n- other\n\n16. Utiliza \"bid_submission\" cuando el documento deba entregarse con la presentación inicial de la oferta.\n\n17. Utiliza \"eligibility\" cuando el documento sea empleado para verificar requisitos habilitantes jurídicos, financieros, técnicos, de experiencia o capacidad organizacional.\n\n18. Utiliza \"evaluation\" cuando el documento sea requerido para asignar puntaje, comparar propuestas, subsanar o evaluar una oferta.\n\n19. Utiliza \"award\" cuando el documento se exija únicamente al adjudicatario antes de la adjudicación definitiva.\n\n20. Utiliza \"contract_signing\" cuando el documento se exija para legalizar, perfeccionar o firmar el contrato.\n\n21. Utiliza \"contract_execution\" cuando el documento se exija durante la ejecución del contrato.\n\n22. Utiliza \"payment\" cuando el documento sea necesario exclusivamente para:\n\n- facturación\n- cobro\n- giro electrónico\n- desembolso\n- cambio de cuenta bancaria\n- trámite de pago\n\n23. Utiliza \"other\" cuando la etapa no pueda determinarse con suficiente evidencia.\n\n24. Distingue cuidadosamente entre documentos exigidos al presentar la oferta y documentos solicitados únicamente al adjudicatario, contratista o proveedor durante la ejecución o el pago.\n\n25. No clasifiques como requisito de presentación de oferta un documento solicitado únicamente para:\n\n- facturación\n- giro electrónico\n- legalización\n- firma del contrato\n- ejecución contractual\n- cobro\n- pago\n\n26. No conviertas automáticamente las obligaciones contractuales en requisitos documentales.\n\n27. Identifica el sujeto al que aplica el requisito mediante applies_to.\n\nLos valores permitidos para applies_to son:\n\n- bidder\n- legal_representative\n- legal_entity\n- natural_person\n- consortium_member\n- temporary_union_member\n- accountant\n- statutory_auditor\n- technical_staff\n- subcontractor\n- other\n\n28. Cuando applies_to no pueda determinarse, devuelve:\n\n\"applies_to\": \"other\"\n\n29. source_page debe contener el número de página solamente cuando pueda determinarse con suficiente claridad.\n\n30. Cuando source_page no pueda determinarse, devuelve:\n\n\"source_page\": 0\n\n31. confidence_score debe estar entre 0 y 1.\n\n32. confidence_score representa la claridad de la evidencia documental, no la seguridad subjetiva del modelo.\n\n33. Utiliza confidence_score igual a 1 únicamente cuando sean totalmente explícitos:\n\n- el documento exigido\n- el sujeto obligado\n- la condición\n- la etapa\n- la evidencia\n\n34. No utilices valores null.\n\n35. Cuando un valor textual no aparezca, devuelve una cadena vacía \"\".\n\n36. Devuelve únicamente JSON válido.\n\n37. No utilices markdown.\n\n38. No utilices bloques de código.\n\n39. No escribas explicaciones, introducciones, conclusiones o comentarios fuera del JSON.\n\n40. La respuesta debe comenzar directamente con el carácter { y terminar directamente con el carácter }.\n\nCATEGORÍAS PERMITIDAS\n\nLos únicos valores permitidos para requirement_category son:\n\n- legal\n- tax\n- disciplinary\n- fiscal\n- social_security\n- financial\n- experience\n- technical\n- administrative\n- entity_template\n- signature\n- consortium\n- other\n\nESTRUCTURA EXACTA DE RESPUESTA\n\n{\n  \"document_summary\": \"Resumen breve del documento analizado\",\n  \"requirements\": [\n    {\n      \"requirement_category\": \"legal\",\n      \"requirement_name\": \"Nombre claro del requisito\",\n      \"normalized_document_type\": \"chamber_of_commerce\",\n      \"requirement_description\": \"Descripción precisa de lo que debe presentar o acreditar el sujeto obligado\",\n      \"mandatory\": true,\n      \"condition_text\": \"\",\n      \"maximum_age_days\": 30,\n      \"requires_signature\": false,\n      \"requires_entity_template\": false,\n      \"requires_original\": false,\n      \"requires_notarization\": false,\n      \"requires_translation\": false,\n      \"applies_to\": \"bidder\",\n      \"requirement_stage\": \"eligibility\",\n      \"source_page\": 5,\n      \"source_section\": \"Requisitos habilitantes\",\n      \"evidence_text\": \"Fragmento breve y literal que respalda el requisito\",\n      \"confidence_score\": 0.95\n    }\n  ]\n}\n\nCuando el documento no contenga requisitos documentales, devuelve exactamente un objeto con esta estructura:\n\n{\n  \"document_summary\": \"Resumen breve del documento analizado\",\n  \"requirements\": []\n}\n`.trim();\n\nconst userPrompt = `\nDOCUMENTO A ANALIZAR\n\nReferencia del proceso:\n${$json.process_reference ?? ''}\n\nNombre del documento:\n${$json.document_name ?? ''}\n\nCategoría documental:\n${$json.primary_category ?? ''}\n\nCantidad estimada de páginas:\n${$json.page_count ?? 'desconocida'}\n\nCantidad total de caracteres:\n${fullText.length}\n\nEl documento fue truncado para este análisis:\n${fullText.length > 70000 ? 'sí' : 'no'}\n\nCONTENIDO DEL DOCUMENTO\n\n${documentText}\n`.trim();\n\nreturn {\n  json: {\n    ...$json,\n\n    system_prompt:\n      systemPrompt,\n\n    user_prompt:\n      userPrompt,\n\n    source_character_count:\n      fullText.length,\n\n    analyzed_character_count:\n      documentText.length,\n\n    document_was_truncated:\n      fullText.length > 70000,\n\n    prompt_version:\n      2,\n\n    prepared_at:\n      new Date().toISOString(),\n  },\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        -672
+      ],
+      "id": "1cf13bab-5c92-4bad-9be4-29a8a69b6981",
+      "name": "Preparar entrada IA WF-015"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.1-flash-lite",
+        "options": {
+          "maxOutputTokens": 4096,
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        1072,
+        -16
+      ],
+      "id": "b21acbaf-a71f-40e6-b410-ddb5b5089394",
+      "name": "gemini",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "ZfWqIHhxn1PfcxaP",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const context =\n  $('Preparar entrada IA WF-015')\n    .item\n    .json;\n\nconst rawResponse =\n  $json.output\n  ?? $json.text\n  ?? $json.response\n  ?? $json.content\n  ?? $json.message?.content\n  ?? $json.choices?.[0]?.message?.content\n  ?? $json;\n\nconst cleanText = (value) =>\n  String(value ?? '')\n    .replace(/\\u0000/g, '')\n    .trim();\n\nconst cleanNullableText = (value) => {\n  const text =\n    cleanText(value);\n\n  return text || null;\n};\n\nconst normalizeBoolean = (value) => {\n  if (typeof value === 'boolean') {\n    return value;\n  }\n\n  const normalized =\n    cleanText(value)\n      .toLowerCase();\n\n  return [\n    'true',\n    '1',\n    'yes',\n    'si',\n    'sí',\n  ].includes(normalized);\n};\n\nconst normalizeOptionalInteger = (value) => {\n  if (\n    value === null\n    || value === undefined\n    || value === ''\n  ) {\n    return null;\n  }\n\n  const number =\n    Number.parseInt(\n      value,\n      10\n    );\n\n  return Number.isFinite(number)\n    && number > 0\n      ? number\n      : null;\n};\n\nconst normalizeConfidence = (value) => {\n  const number =\n    Number(value);\n\n  if (!Number.isFinite(number)) {\n    return null;\n  }\n\n  return Math.max(\n    0,\n    Math.min(\n      1,\n      number\n    )\n  );\n};\n\nconst allowedCategories =\n  new Set([\n    'legal',\n    'tax',\n    'disciplinary',\n    'fiscal',\n    'social_security',\n    'financial',\n    'experience',\n    'technical',\n    'administrative',\n    'entity_template',\n    'signature',\n    'consortium',\n    'other',\n  ]);\n\nconst allowedAppliesTo =\n  new Set([\n    'bidder',\n    'legal_representative',\n    'legal_entity',\n    'natural_person',\n    'consortium_member',\n    'temporary_union_member',\n    'accountant',\n    'statutory_auditor',\n    'technical_staff',\n    'subcontractor',\n    'other',\n  ]);\n\nconst allowedRequirementStages =\n  new Set([\n    'bid_submission',\n    'eligibility',\n    'evaluation',\n    'award',\n    'contract_signing',\n    'contract_execution',\n    'payment',\n    'other',\n  ]);\n\nconst bidRequirementStages =\n  new Set([\n    'bid_submission',\n    'eligibility',\n    'evaluation',\n  ]);\n\nconst baseResult = {\n  opportunity_document_id:\n    context.opportunity_document_id,\n\n  organization_id:\n    context.organization_id,\n\n  opportunity_analysis_id:\n    context.opportunity_analysis_id,\n\n  process_id:\n    context.process_id,\n\n  process_reference:\n    context.process_reference,\n\n  document_name:\n    context.document_name,\n\n  primary_category:\n    context.primary_category,\n\n  extraction_id:\n    context.extraction_id,\n\n  extraction_version:\n    context.extraction_version,\n\n  model_name:\n    context.ai_requirement_model,\n\n  prompt_version:\n    context.ai_requirement_prompt_version\n    ?? context.prompt_version\n    ?? 2,\n};\n\nconst invalidResponse = (\n  message,\n  responsePreview\n) => ({\n  json: {\n    ...baseResult,\n\n    document_summary:\n      null,\n\n    requirements:\n      [],\n\n    requirements_count:\n      0,\n\n    response_valid:\n      false,\n\n    error_message:\n      message,\n\n    raw_response_preview:\n      cleanText(\n        responsePreview\n      ).slice(\n        0,\n        2000\n      ),\n\n    normalized_at:\n      new Date().toISOString(),\n  },\n});\n\nconst extractJsonObject = (text) => {\n  let start =\n    -1;\n\n  let depth =\n    0;\n\n  let inString =\n    false;\n\n  let escaped =\n    false;\n\n  for (\n    let index = 0;\n    index < text.length;\n    index += 1\n  ) {\n    const character =\n      text[index];\n\n    if (start === -1) {\n      if (character === '{') {\n        start =\n          index;\n\n        depth =\n          1;\n      }\n\n      continue;\n    }\n\n    if (escaped) {\n      escaped =\n        false;\n\n      continue;\n    }\n\n    if (\n      inString\n      && character === '\\\\'\n    ) {\n      escaped =\n        true;\n\n      continue;\n    }\n\n    if (character === '\"') {\n      inString =\n        !inString;\n\n      continue;\n    }\n\n    if (inString) {\n      continue;\n    }\n\n    if (character === '{') {\n      depth +=\n        1;\n    }\n\n    if (character === '}') {\n      depth -=\n        1;\n\n      if (depth === 0) {\n        return text.slice(\n          start,\n          index + 1\n        );\n      }\n    }\n  }\n\n  return null;\n};\n\nlet parsed;\n\nif (\n  rawResponse\n  && typeof rawResponse === 'object'\n  && !Array.isArray(rawResponse)\n) {\n  parsed =\n    rawResponse;\n} else {\n  let responseText =\n    cleanText(\n      rawResponse\n    );\n\n  responseText =\n    responseText\n      .replace(\n        /^```json\\s*/i,\n        ''\n      )\n      .replace(\n        /^```\\s*/i,\n        ''\n      )\n      .replace(\n        /\\s*```$/i,\n        ''\n      )\n      .trim();\n\n  let jsonCandidate =\n    responseText;\n\n  try {\n    parsed =\n      JSON.parse(\n        jsonCandidate\n      );\n  } catch (directError) {\n    jsonCandidate =\n      extractJsonObject(\n        responseText\n      );\n\n    if (!jsonCandidate) {\n      return invalidResponse(\n        'La IA respondió, pero no incluyó ningún objeto JSON.',\n        responseText\n      );\n    }\n\n    try {\n      parsed =\n        JSON.parse(\n          jsonCandidate\n        );\n    } catch (extractedError) {\n      return invalidResponse(\n        `La IA no devolvió JSON válido: ${extractedError.message}`,\n        responseText\n      );\n    }\n  }\n}\n\nif (\n  !parsed\n  || typeof parsed !== 'object'\n  || Array.isArray(parsed)\n) {\n  return invalidResponse(\n    'La respuesta de la IA no contiene un objeto JSON válido.',\n    rawResponse\n  );\n}\n\nif (\n  !Array.isArray(\n    parsed.requirements\n  )\n) {\n  return invalidResponse(\n    'La respuesta no contiene la propiedad requirements como arreglo.',\n    rawResponse\n  );\n}\n\nconst requirements =\n  parsed.requirements\n    .map(\n      (\n        requirement,\n        index\n      ) => {\n        if (\n          !requirement\n          || typeof requirement !== 'object'\n          || Array.isArray(requirement)\n        ) {\n          return null;\n        }\n\n        const name =\n          cleanText(\n            requirement\n              .requirement_name\n          );\n\n        const evidence =\n          cleanNullableText(\n            requirement\n              .evidence_text\n          );\n\n        if (\n          !name\n          || !evidence\n        ) {\n          return null;\n        }\n\n        const categoryCandidate =\n          cleanText(\n            requirement\n              .requirement_category\n          )\n            .toLowerCase();\n\n        const category =\n          allowedCategories.has(\n            categoryCandidate\n          )\n            ? categoryCandidate\n            : 'other';\n\n        const appliesCandidate =\n          cleanText(\n            requirement\n              .applies_to\n          )\n            .toLowerCase();\n\n        const appliesTo =\n          allowedAppliesTo.has(\n            appliesCandidate\n          )\n            ? appliesCandidate\n            : 'other';\n\n        const stageCandidate =\n          cleanText(\n            requirement\n              .requirement_stage\n          )\n            .toLowerCase();\n\n        const requirementStage =\n          allowedRequirementStages.has(\n            stageCandidate\n          )\n            ? stageCandidate\n            : 'other';\n\n        const isBidRequirement =\n          bidRequirementStages.has(\n            requirementStage\n          );\n\n        const conditionText =\n          cleanNullableText(\n            requirement\n              .condition_text\n          );\n\n        /*\n         * Si la IA identifica una condición,\n         * el requisito no debe almacenarse como\n         * obligatorio en todos los casos.\n         */\n        const mandatory =\n          conditionText\n            ? false\n            : (\n                requirement.mandatory\n                  === undefined\n                    ? true\n                    : normalizeBoolean(\n                        requirement\n                          .mandatory\n                      )\n              );\n\n        return {\n          requirement_category:\n            category,\n\n          requirement_name:\n            name,\n\n          normalized_document_type:\n            cleanNullableText(\n              requirement\n                .normalized_document_type\n            ),\n\n          requirement_description:\n            cleanNullableText(\n              requirement\n                .requirement_description\n            ),\n\n          mandatory,\n\n          condition_text:\n            conditionText,\n\n          maximum_age_days:\n            normalizeOptionalInteger(\n              requirement\n                .maximum_age_days\n            ),\n\n          requires_signature:\n            normalizeBoolean(\n              requirement\n                .requires_signature\n            ),\n\n          requires_entity_template:\n            normalizeBoolean(\n              requirement\n                .requires_entity_template\n            ),\n\n          requires_original:\n            normalizeBoolean(\n              requirement\n                .requires_original\n            ),\n\n          requires_notarization:\n            normalizeBoolean(\n              requirement\n                .requires_notarization\n            ),\n\n          requires_translation:\n            normalizeBoolean(\n              requirement\n                .requires_translation\n            ),\n\n          applies_to:\n            appliesTo,\n\n          requirement_stage:\n            requirementStage,\n\n          is_bid_requirement:\n            isBidRequirement,\n\n          source_page:\n            normalizeOptionalInteger(\n              requirement\n                .source_page\n            ),\n\n          source_section:\n            cleanNullableText(\n              requirement\n                .source_section\n            ),\n\n          evidence_text:\n            evidence.slice(\n              0,\n              450\n            ),\n\n          confidence_score:\n            normalizeConfidence(\n              requirement\n                .confidence_score\n            ),\n\n          source_order:\n            index + 1,\n        };\n      }\n    )\n    .filter(Boolean);\n\nreturn {\n  json: {\n    ...baseResult,\n\n    document_summary:\n      cleanNullableText(\n        parsed.document_summary\n      ),\n\n    requirements,\n\n    requirements_count:\n      requirements.length,\n\n    response_valid:\n      true,\n\n    error_message:\n      null,\n\n    raw_response_preview:\n      null,\n\n    normalized_at:\n      new Date().toISOString(),\n  },\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        -448
+      ],
+      "id": "9a844cb1-09f2-4039-bf2d-ae0d6b4bc6ee",
+      "name": "Normalizar respuesta IA WF-015"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "1ed4269e-712e-41f5-a67f-8b1b7ced86fc",
+              "leftValue": "={{\n  $json.response_valid === true\n  && Number($json.requirements_count ?? 0) >= 0\n  && Boolean($json.opportunity_document_id)\n}}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1472,
+        -528
+      ],
+      "id": "949ef454-5558-4a5f-840f-270d47c91541",
+      "name": "¿Respuesta IA válida WF-015?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS (\n    SELECT\n        NULLIF(\n            $1::TEXT,\n            ''\n        )::UUID\n            AS opportunity_document_id,\n\n        NULLIF(\n            $2::TEXT,\n            ''\n        )::UUID\n            AS organization_id,\n\n        NULLIF(\n            $3::TEXT,\n            ''\n        )::UUID\n            AS opportunity_analysis_id,\n\n        NULLIF(\n            $4::TEXT,\n            ''\n        )::UUID\n            AS process_id,\n\n        NULLIF(\n            $5::TEXT,\n            ''\n        )::UUID\n            AS extraction_id,\n\n        COALESCE(\n            NULLIF(\n                $6::TEXT,\n                ''\n            )::INTEGER,\n            1\n        )\n            AS extraction_version,\n\n        COALESCE(\n            NULLIF(\n                BTRIM(\n                    $7::TEXT\n                ),\n                ''\n            ),\n            'unknown'\n        )\n            AS ai_model,\n\n        COALESCE(\n            NULLIF(\n                $8::TEXT,\n                ''\n            )::INTEGER,\n            2\n        )\n            AS prompt_version,\n\n        CASE\n            WHEN JSONB_TYPEOF(\n                COALESCE(\n                    $9::JSONB,\n                    '[]'::JSONB\n                )\n            ) = 'array'\n                THEN COALESCE(\n                    $9::JSONB,\n                    '[]'::JSONB\n                )\n\n            ELSE\n                '[]'::JSONB\n        END\n            AS requirements,\n\n        NULLIF(\n            BTRIM(\n                $10::TEXT\n            ),\n            ''\n        )\n            AS document_summary\n),\n\nraw_incoming AS (\n    SELECT\n        parameters.*,\n\n        requirement.value\n            AS requirement_data,\n\n        requirement.ordinality::INTEGER\n            AS requirement_order,\n\n        CASE\n            WHEN LOWER(\n                BTRIM(\n                    COALESCE(\n                        requirement.value\n                            ->> 'requirement_stage',\n                        'other'\n                    )\n                )\n            ) IN (\n                'bid_submission',\n                'eligibility',\n                'evaluation',\n                'award',\n                'contract_signing',\n                'contract_execution',\n                'payment',\n                'other'\n            )\n                THEN LOWER(\n                    BTRIM(\n                        COALESCE(\n                            requirement.value\n                                ->> 'requirement_stage',\n                            'other'\n                        )\n                    )\n                )\n\n            ELSE\n                'other'\n        END\n            AS normalized_requirement_stage\n\n    FROM parameters\n\n    CROSS JOIN LATERAL\n        JSONB_ARRAY_ELEMENTS(\n            parameters.requirements\n        ) WITH ORDINALITY\n        AS requirement(\n            value,\n            ordinality\n        )\n\n    WHERE JSONB_TYPEOF(\n        requirement.value\n    ) = 'object'\n),\n\nincoming AS (\n    SELECT\n        raw_incoming.*,\n\n        ENCODE(\n            DIGEST(\n                CONCAT_WS(\n                    '|',\n\n                    LOWER(\n                        BTRIM(\n                            COALESCE(\n                                raw_incoming.requirement_data\n                                    ->> 'requirement_category',\n                                'other'\n                            )\n                        )\n                    ),\n\n                    LOWER(\n                        BTRIM(\n                            COALESCE(\n                                raw_incoming.requirement_data\n                                    ->> 'requirement_name',\n                                ''\n                            )\n                        )\n                    ),\n\n                    LOWER(\n                        BTRIM(\n                            COALESCE(\n                                raw_incoming.requirement_data\n                                    ->> 'normalized_document_type',\n                                ''\n                            )\n                        )\n                    ),\n\n                    LOWER(\n                        BTRIM(\n                            COALESCE(\n                                raw_incoming.requirement_data\n                                    ->> 'applies_to',\n                                'other'\n                            )\n                        )\n                    ),\n\n                    raw_incoming\n                        .normalized_requirement_stage,\n\n                    COALESCE(\n                        raw_incoming.requirement_data\n                            ->> 'maximum_age_days',\n                        ''\n                    ),\n\n                    COALESCE(\n                        raw_incoming.requirement_data\n                            ->> 'requires_signature',\n                        'false'\n                    ),\n\n                    COALESCE(\n                        raw_incoming.requirement_data\n                            ->> 'requires_entity_template',\n                        'false'\n                    ),\n\n                    COALESCE(\n                        raw_incoming.requirement_data\n                            ->> 'requires_original',\n                        'false'\n                    ),\n\n                    COALESCE(\n                        raw_incoming.requirement_data\n                            ->> 'requires_notarization',\n                        'false'\n                    ),\n\n                    COALESCE(\n                        raw_incoming.requirement_data\n                            ->> 'requires_translation',\n                        'false'\n                    )\n                ),\n\n                'sha256'\n            ),\n\n            'hex'\n        )\n            AS requirement_hash\n\n    FROM raw_incoming\n),\n\ndeduplicated AS (\n    SELECT DISTINCT ON (\n        incoming.requirement_hash\n    )\n        incoming.*\n\n    FROM incoming\n\n    WHERE NULLIF(\n        BTRIM(\n            incoming.requirement_data\n                ->> 'requirement_name'\n        ),\n        ''\n    ) IS NOT NULL\n\n      AND NULLIF(\n          BTRIM(\n              incoming.requirement_data\n                  ->> 'evidence_text'\n          ),\n          ''\n      ) IS NOT NULL\n\n    ORDER BY\n        incoming.requirement_hash,\n        incoming.requirement_order\n),\n\nupserted AS (\n    INSERT INTO saas.opportunity_requirements\n        AS stored_requirement\n    (\n        organization_id,\n        opportunity_analysis_id,\n        process_id,\n        opportunity_document_id,\n        extraction_id,\n\n        category,\n        requirement_category,\n        requirement_name,\n        normalized_document_type,\n        requirement_description,\n\n        mandatory,\n        condition_text,\n        maximum_age_days,\n\n        requires_signature,\n        requires_entity_template,\n        requires_original,\n        requires_notarization,\n        requires_translation,\n\n        applies_to,\n        requirement_stage,\n        is_bid_requirement,\n\n        source_page,\n        source_section,\n        evidence_text,\n        confidence_score,\n\n        extraction_version,\n        requirement_hash_sha256,\n        status,\n        ai_model,\n        metadata,\n\n        created_at,\n        updated_at\n    )\n\n    SELECT\n        deduplicated.organization_id,\n        deduplicated.opportunity_analysis_id,\n        deduplicated.process_id,\n        deduplicated.opportunity_document_id,\n        deduplicated.extraction_id,\n\n        COALESCE(\n            NULLIF(\n                LOWER(\n                    BTRIM(\n                        deduplicated.requirement_data\n                            ->> 'requirement_category'\n                    )\n                ),\n                ''\n            ),\n            'other'\n        )\n            AS category,\n\n        COALESCE(\n            NULLIF(\n                LOWER(\n                    BTRIM(\n                        deduplicated.requirement_data\n                            ->> 'requirement_category'\n                    )\n                ),\n                ''\n            ),\n            'other'\n        )\n            AS requirement_category,\n\n        BTRIM(\n            deduplicated.requirement_data\n                ->> 'requirement_name'\n        )\n            AS requirement_name,\n\n        NULLIF(\n            BTRIM(\n                deduplicated.requirement_data\n                    ->> 'normalized_document_type'\n            ),\n            ''\n        )\n            AS normalized_document_type,\n\n        NULLIF(\n            BTRIM(\n                deduplicated.requirement_data\n                    ->> 'requirement_description'\n            ),\n            ''\n        )\n            AS requirement_description,\n\n        COALESCE(\n            NULLIF(\n                deduplicated.requirement_data\n                    ->> 'mandatory',\n                ''\n            )::BOOLEAN,\n            TRUE\n        )\n            AS mandatory,\n\n        NULLIF(\n            BTRIM(\n                deduplicated.requirement_data\n                    ->> 'condition_text'\n            ),\n            ''\n        )\n            AS condition_text,\n\n        CASE\n            WHEN COALESCE(\n                deduplicated.requirement_data\n                    ->> 'maximum_age_days',\n                ''\n            ) ~ '^[0-9]+$'\n\n             AND (\n                deduplicated.requirement_data\n                    ->> 'maximum_age_days'\n             )::INTEGER > 0\n                THEN (\n                    deduplicated.requirement_data\n                        ->> 'maximum_age_days'\n                )::INTEGER\n\n            ELSE\n                NULL\n        END\n            AS maximum_age_days,\n\n        COALESCE(\n            NULLIF(\n                deduplicated.requirement_data\n                    ->> 'requires_signature',\n                ''\n            )::BOOLEAN,\n            FALSE\n        )\n            AS requires_signature,\n\n        COALESCE(\n            NULLIF(\n                deduplicated.requirement_data\n                    ->> 'requires_entity_template',\n                ''\n            )::BOOLEAN,\n            FALSE\n        )\n            AS requires_entity_template,\n\n        COALESCE(\n            NULLIF(\n                deduplicated.requirement_data\n                    ->> 'requires_original',\n                ''\n            )::BOOLEAN,\n            FALSE\n        )\n            AS requires_original,\n\n        COALESCE(\n            NULLIF(\n                deduplicated.requirement_data\n                    ->> 'requires_notarization',\n                ''\n            )::BOOLEAN,\n            FALSE\n        )\n            AS requires_notarization,\n\n        COALESCE(\n            NULLIF(\n                deduplicated.requirement_data\n                    ->> 'requires_translation',\n                ''\n            )::BOOLEAN,\n            FALSE\n        )\n            AS requires_translation,\n\n        COALESCE(\n            NULLIF(\n                LOWER(\n                    BTRIM(\n                        deduplicated.requirement_data\n                            ->> 'applies_to'\n                    )\n                ),\n                ''\n            ),\n            'other'\n        )\n            AS applies_to,\n\n        deduplicated\n            .normalized_requirement_stage\n            AS requirement_stage,\n\n        (\n            deduplicated\n                .normalized_requirement_stage\n            IN (\n                'bid_submission',\n                'eligibility',\n                'evaluation'\n            )\n        )\n            AS is_bid_requirement,\n\n        CASE\n            WHEN COALESCE(\n                deduplicated.requirement_data\n                    ->> 'source_page',\n                ''\n            ) ~ '^[0-9]+$'\n\n             AND (\n                deduplicated.requirement_data\n                    ->> 'source_page'\n             )::INTEGER > 0\n                THEN (\n                    deduplicated.requirement_data\n                        ->> 'source_page'\n                )::INTEGER\n\n            ELSE\n                NULL\n        END\n            AS source_page,\n\n        NULLIF(\n            BTRIM(\n                deduplicated.requirement_data\n                    ->> 'source_section'\n            ),\n            ''\n        )\n            AS source_section,\n\n        LEFT(\n            NULLIF(\n                BTRIM(\n                    deduplicated.requirement_data\n                        ->> 'evidence_text'\n                ),\n                ''\n            ),\n            450\n        )\n            AS evidence_text,\n\n        CASE\n            WHEN COALESCE(\n                deduplicated.requirement_data\n                    ->> 'confidence_score',\n                ''\n            ) ~ '^[0-9]+([.][0-9]+)?$'\n                THEN LEAST(\n                    1::NUMERIC,\n\n                    GREATEST(\n                        0::NUMERIC,\n\n                        (\n                            deduplicated.requirement_data\n                                ->> 'confidence_score'\n                        )::NUMERIC\n                    )\n                )::NUMERIC(5,4)\n\n            ELSE\n                NULL\n        END\n            AS confidence_score,\n\n        deduplicated.extraction_version,\n\n        deduplicated.requirement_hash,\n\n        CASE\n            WHEN\n                CASE\n                    WHEN COALESCE(\n                        deduplicated.requirement_data\n                            ->> 'confidence_score',\n                        ''\n                    ) ~ '^[0-9]+([.][0-9]+)?$'\n                        THEN (\n                            deduplicated.requirement_data\n                                ->> 'confidence_score'\n                        )::NUMERIC\n\n                    ELSE\n                        0::NUMERIC\n                END < 0.60\n                THEN 'review_required'\n\n            ELSE\n                'active'\n        END\n            AS status,\n\n        deduplicated.ai_model,\n\n        jsonb_build_object(\n            'prompt_version',\n            deduplicated.prompt_version,\n\n            'requirement_order',\n            deduplicated.requirement_order,\n\n            'requirement_stage',\n            deduplicated\n                .normalized_requirement_stage,\n\n            'is_bid_requirement',\n            (\n                deduplicated\n                    .normalized_requirement_stage\n                IN (\n                    'bid_submission',\n                    'eligibility',\n                    'evaluation'\n                )\n            ),\n\n            'document_summary',\n            deduplicated.document_summary,\n\n            'saved_by',\n            'WF-015',\n\n            'saved_at',\n            NOW()\n        )\n            AS metadata,\n\n        NOW()\n            AS created_at,\n\n        NOW()\n            AS updated_at\n\n    FROM deduplicated\n\n    ON CONFLICT (\n        opportunity_document_id,\n        requirement_hash_sha256,\n        extraction_version\n    )\n\n    DO UPDATE SET\n        organization_id =\n            EXCLUDED.organization_id,\n\n        opportunity_analysis_id =\n            EXCLUDED.opportunity_analysis_id,\n\n        process_id =\n            EXCLUDED.process_id,\n\n        extraction_id =\n            EXCLUDED.extraction_id,\n\n        category =\n            EXCLUDED.category,\n\n        requirement_category =\n            EXCLUDED.requirement_category,\n\n        requirement_name =\n            EXCLUDED.requirement_name,\n\n        normalized_document_type =\n            EXCLUDED.normalized_document_type,\n\n        requirement_description =\n            EXCLUDED.requirement_description,\n\n        mandatory =\n            EXCLUDED.mandatory,\n\n        condition_text =\n            EXCLUDED.condition_text,\n\n        maximum_age_days =\n            EXCLUDED.maximum_age_days,\n\n        requires_signature =\n            EXCLUDED.requires_signature,\n\n        requires_entity_template =\n            EXCLUDED.requires_entity_template,\n\n        requires_original =\n            EXCLUDED.requires_original,\n\n        requires_notarization =\n            EXCLUDED.requires_notarization,\n\n        requires_translation =\n            EXCLUDED.requires_translation,\n\n        applies_to =\n            EXCLUDED.applies_to,\n\n        requirement_stage =\n            EXCLUDED.requirement_stage,\n\n        is_bid_requirement =\n            EXCLUDED.is_bid_requirement,\n\n        source_page =\n            EXCLUDED.source_page,\n\n        source_section =\n            EXCLUDED.source_section,\n\n        evidence_text =\n            EXCLUDED.evidence_text,\n\n        confidence_score =\n            EXCLUDED.confidence_score,\n\n        status =\n            EXCLUDED.status,\n\n        ai_model =\n            EXCLUDED.ai_model,\n\n        metadata =\n            COALESCE(\n                stored_requirement.metadata,\n                '{}'::JSONB\n            )\n            || EXCLUDED.metadata,\n\n        updated_at =\n            NOW()\n\n    RETURNING\n        stored_requirement.id,\n\n        stored_requirement\n            .opportunity_document_id,\n\n        stored_requirement\n            .requirement_hash_sha256,\n\n        stored_requirement\n            .requirement_stage,\n\n        stored_requirement\n            .is_bid_requirement,\n\n        stored_requirement.status\n),\n\narchived AS (\n    UPDATE saas.opportunity_requirements\n        AS existing_requirement\n\n    SET\n        status =\n            'archived',\n\n        metadata =\n            COALESCE(\n                existing_requirement.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'archived_by',\n                'WF-015',\n\n                'archived_at',\n                NOW(),\n\n                'archive_reason',\n                'El requisito no apareció en la extracción vigente.'\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM parameters\n\n    WHERE existing_requirement\n              .opportunity_document_id =\n          parameters\n              .opportunity_document_id\n\n      AND existing_requirement.status IN (\n          'active',\n          'review_required'\n      )\n\n      AND NOT EXISTS (\n          SELECT 1\n\n          FROM upserted\n\n          WHERE upserted.id =\n                existing_requirement.id\n      )\n\n    RETURNING\n        existing_requirement.id\n),\n\nexecution_summary AS (\n    SELECT\n        parameters.opportunity_document_id,\n        parameters.ai_model,\n        parameters.prompt_version,\n        parameters.extraction_version,\n        parameters.document_summary,\n\n        (\n            SELECT COUNT(*)\n            FROM upserted\n        )::INTEGER\n            AS requirements_saved,\n\n        (\n            SELECT COUNT(*)\n            FROM upserted\n            WHERE status = 'active'\n        )::INTEGER\n            AS active_requirements,\n\n        (\n            SELECT COUNT(*)\n            FROM upserted\n            WHERE status = 'review_required'\n        )::INTEGER\n            AS review_required_requirements,\n\n        (\n            SELECT COUNT(*)\n            FROM upserted\n            WHERE is_bid_requirement = TRUE\n        )::INTEGER\n            AS bid_requirements,\n\n        (\n            SELECT COUNT(*)\n            FROM upserted\n            WHERE is_bid_requirement = FALSE\n        )::INTEGER\n            AS non_bid_requirements,\n\n        (\n            SELECT COUNT(*)\n            FROM archived\n        )::INTEGER\n            AS requirements_archived\n\n    FROM parameters\n),\n\ndocument_updated AS (\n    UPDATE saas.opportunity_documents\n        AS document\n\n    SET\n        ai_requirement_status =\n            'completed',\n\n        ai_requirement_finished_at =\n            NOW(),\n\n        ai_requirement_error =\n            NULL,\n\n        ai_requirement_model =\n            execution_summary.ai_model,\n\n        ai_requirement_prompt_version =\n            execution_summary.prompt_version,\n\n        ai_requirement_count =\n            execution_summary\n                .requirements_saved,\n\n        metadata =\n            (\n                COALESCE(\n                    document.metadata,\n                    '{}'::JSONB\n                )\n                - 'active_requirement_execution_id'\n                - 'active_requirement_started_at'\n            )\n            || jsonb_build_object(\n                'last_requirement_analysis_at',\n                NOW(),\n\n                'last_requirement_analysis_workflow',\n                'WF-015',\n\n                'last_requirement_analysis_model',\n                execution_summary.ai_model,\n\n                'last_requirement_prompt_version',\n                execution_summary.prompt_version,\n\n                'last_requirement_extraction_version',\n                execution_summary.extraction_version,\n\n                'last_requirement_count',\n                execution_summary.requirements_saved,\n\n                'last_active_requirement_count',\n                execution_summary.active_requirements,\n\n                'last_review_required_count',\n                execution_summary\n                    .review_required_requirements,\n\n                'last_bid_requirement_count',\n                execution_summary.bid_requirements,\n\n                'last_non_bid_requirement_count',\n                execution_summary.non_bid_requirements,\n\n                'last_archived_requirement_count',\n                execution_summary\n                    .requirements_archived,\n\n                'last_document_summary',\n                execution_summary.document_summary\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM execution_summary\n\n    WHERE document.id =\n          execution_summary\n              .opportunity_document_id\n\n    RETURNING\n        document.id\n            AS opportunity_document_id,\n\n        document.organization_id,\n        document.opportunity_analysis_id,\n        document.process_id,\n\n        document.process_reference,\n        document.document_name,\n        document.primary_category,\n\n        document.ai_requirement_status,\n        document.ai_requirement_attempt_count,\n        document.ai_requirement_count,\n        document.ai_requirement_model,\n        document.ai_requirement_prompt_version,\n        document.ai_requirement_error,\n        document.updated_at\n)\n\nSELECT\n    document_updated\n        .opportunity_document_id,\n\n    document_updated.organization_id,\n    document_updated\n        .opportunity_analysis_id,\n\n    document_updated.process_id,\n\n    document_updated.process_reference,\n    document_updated.document_name,\n    document_updated.primary_category,\n\n    document_updated\n        .ai_requirement_status,\n\n    document_updated\n        .ai_requirement_attempt_count,\n\n    document_updated\n        .ai_requirement_count,\n\n    document_updated\n        .ai_requirement_model,\n\n    document_updated\n        .ai_requirement_prompt_version,\n\n    document_updated\n        .ai_requirement_error,\n\n    execution_summary\n        .requirements_saved,\n\n    execution_summary\n        .active_requirements,\n\n    execution_summary\n        .review_required_requirements,\n\n    execution_summary\n        .bid_requirements,\n\n    execution_summary\n        .non_bid_requirements,\n\n    execution_summary\n        .requirements_archived,\n\n    document_updated.updated_at,\n\n    TRUE\n        AS requirements_stored,\n\n    'success'\n        AS save_result\n\nFROM document_updated\n\nJOIN execution_summary\n    ON execution_summary\n           .opportunity_document_id =\n       document_updated\n           .opportunity_document_id;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $json.opportunity_document_id\n    ?? \"\"\n  ),\n\n  String(\n    $json.organization_id\n    ?? \"\"\n  ),\n\n  String(\n    $json.opportunity_analysis_id\n    ?? \"\"\n  ),\n\n  String(\n    $json.process_id\n    ?? \"\"\n  ),\n\n  String(\n    $json.extraction_id\n    ?? \"\"\n  ),\n\n  String(\n    $json.extraction_version\n    ?? 1\n  ),\n\n  String(\n    $json.model_name\n    ?? \"unknown\"\n  ).trim(),\n\n  String(\n    $json.prompt_version\n    ?? 2\n  ),\n\n  JSON.stringify(\n    $json.requirements\n    ?? []\n  ),\n\n  String(\n    $json.document_summary\n    ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1680,
+        -624
+      ],
+      "id": "deb06cd2-8a2d-4648-ae9b-2ad66b84eb43",
+      "name": "Guardar requisitos WF-015",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH parameters AS (\n    SELECT\n        NULLIF(\n            $1::TEXT,\n            ''\n        )::UUID\n            AS opportunity_document_id,\n\n        LEFT(\n            COALESCE(\n                NULLIF(\n                    $2::TEXT,\n                    ''\n                ),\n                'La respuesta de la IA no fue válida.'\n            ),\n            5000\n        ) AS error_message,\n\n        COALESCE(\n            NULLIF(\n                $3::TEXT,\n                ''\n            ),\n            'unknown'\n        ) AS model_name,\n\n        COALESCE(\n            NULLIF(\n                $4::TEXT,\n                ''\n            ),\n            'WF-015'\n        ) AS workflow_code,\n\n        NULLIF(\n            $5::TEXT,\n            ''\n        ) AS execution_id\n),\n\ndocument_updated AS (\n    UPDATE saas.opportunity_documents\n        AS document\n\n    SET\n        ai_requirement_status =\n            'failed',\n\n        ai_requirement_finished_at =\n            NOW(),\n\n        ai_requirement_error =\n            parameters.error_message,\n\n        metadata =\n            (\n                COALESCE(\n                    document.metadata,\n                    '{}'::JSONB\n                )\n                - 'active_requirement_execution_id'\n                - 'active_requirement_started_at'\n            )\n            || jsonb_build_object(\n                'last_requirement_failure_at',\n                NOW(),\n\n                'last_requirement_failure_workflow',\n                parameters.workflow_code,\n\n                'last_requirement_failure_execution_id',\n                parameters.execution_id,\n\n                'last_requirement_failure_model',\n                parameters.model_name,\n\n                'last_requirement_failure_message',\n                parameters.error_message\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM parameters\n\n    WHERE document.id =\n          parameters.opportunity_document_id\n\n      AND parameters.opportunity_document_id\n          IS NOT NULL\n\n    RETURNING\n        document.id\n            AS opportunity_document_id,\n\n        document.organization_id,\n        document.opportunity_analysis_id,\n        document.process_id,\n\n        document.process_reference,\n        document.document_name,\n\n        document.ai_requirement_status,\n        document.ai_requirement_attempt_count,\n        document.ai_requirement_error,\n        document.updated_at\n)\n\nSELECT\n    updated.opportunity_document_id,\n    updated.organization_id,\n    updated.opportunity_analysis_id,\n    updated.process_id,\n\n    updated.process_reference,\n    updated.document_name,\n\n    updated.ai_requirement_status,\n    updated.ai_requirement_attempt_count,\n    updated.ai_requirement_error,\n    updated.updated_at,\n\n    TRUE\n        AS failure_registered,\n\n    'ai_failure_registered'\n        AS failure_result\n\nFROM document_updated\n    AS updated\n\nUNION ALL\n\nSELECT\n    parameters.opportunity_document_id,\n    NULL::UUID,\n    NULL::UUID,\n    NULL::UUID,\n\n    NULL::TEXT,\n    NULL::TEXT,\n\n    'failed'::VARCHAR,\n    NULL::INTEGER,\n    parameters.error_message,\n    NOW(),\n\n    FALSE\n        AS failure_registered,\n\n    CASE\n        WHEN parameters.opportunity_document_id\n             IS NULL\n            THEN 'missing_document_context'\n\n        ELSE 'document_not_found'\n    END AS failure_result\n\nFROM parameters\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM document_updated\n);",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $json.opportunity_document_id\n    ?? $(\"Preparar entrada IA WF-015\")\n         .item\n         .json\n         .opportunity_document_id\n    ?? \"\"\n  ),\n\n  String(\n    $json.error?.message\n    ?? $json.error_message\n    ?? $json.message\n    ?? $json.description\n    ?? (\n      $json.response_valid === false\n        ? \"La respuesta de la IA no cumplió la estructura requerida.\"\n        : \"La ejecución del modelo de IA produjo un error.\"\n    )\n  ),\n\n  String(\n    $json.model_name\n    ?? $(\"Configurar procesamiento WF-015\")\n         .first()\n         .json\n         .model_name\n    ?? \"unknown\"\n  ),\n\n  \"WF-015\",\n\n  String(\n    $execution.id ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1680,
+        -464
+      ],
+      "id": "773d5962-8399-43da-baf1-c223f2988a33",
+      "name": "Registrar fallo IA WF-015",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1872,
+        -560
+      ],
+      "id": "4071c814-ea64-4f45-9a89-d11c64536c8f",
+      "name": "Pausa entre análisis WF-015",
+      "webhookId": "29036f04-bde3-4ea3-bff2-568a892c21aa"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  json: {\n    workflow_code:\n      'WF-015',\n\n    workflow_name:\n      'Extracción IA de requisitos documentales',\n\n    source_code:\n      $json.source_code\n      ?? 'SECOP_OPPORTUNITY_REQUIREMENT_EXTRACTION',\n\n    execution_id:\n      String(\n        $execution.id ?? ''\n      ),\n\n    lock_acquired:\n      false,\n\n    execution_status:\n      'skipped',\n\n    execution_result:\n      'concurrent_execution',\n\n    message:\n      'La ejecución fue omitida porque otra ejecución de WF-015 posee el bloqueo.',\n\n    active_execution_id:\n      $json.active_execution_id\n      ?? null,\n\n    lock_expires_at:\n      $json.lock_expires_at\n      ?? null,\n\n    skipped_at:\n      new Date().toISOString(),\n  },\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        -176
+      ],
+      "id": "18a1a0b2-4e26-4548-8064-9c310bfabdcc",
+      "name": "Finalizar ejecución omitida WF-015"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.user_prompt }}",
+        "options": {
+          "systemMessage": "={{ $json.system_prompt }}",
+          "maxIterations": 1,
+          "returnIntermediateSteps": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1072,
+        -256
+      ],
+      "id": "8bdf7122-f4f2-4869-9ab0-c1aa532c1b42",
+      "name": "Analizar requisitos con IA WF-015",
+      "retryOnFail": false,
+      "maxTries": 1,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs (\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    finished_at,\n\n    batches_processed,\n    records_read,\n    records_written,\n\n    completion_reason,\n    error_node,\n    error_message,\n    error_details,\n    metadata,\n\n    created_at,\n    updated_at\n)\n\nVALUES (\n    'WF-015',\n\n    'SECOP_OPPORTUNITY_REQUIREMENT_EXTRACTION',\n\n    $1::TEXT,\n\n    NULLIF(\n        $2::TEXT,\n        ''\n    ),\n\n    'running',\n\n    NOW(),\n\n    NULL,\n\n    0,\n    0,\n    0,\n\n    NULL,\n    NULL,\n    NULL,\n\n    '{}'::JSONB,\n\n    jsonb_build_object(\n        'workflow_code',\n        'WF-015',\n\n        'workflow_name',\n        'Extracción IA de requisitos documentales',\n\n        'processing_mode',\n        COALESCE(\n            NULLIF(\n                $3::TEXT,\n                ''\n            ),\n            'all'\n        ),\n\n        'maximum_documents',\n        COALESCE(\n            NULLIF(\n                $4::TEXT,\n                ''\n            )::INTEGER,\n            2\n        ),\n\n        'model_name',\n        COALESCE(\n            NULLIF(\n                BTRIM(\n                    $5::TEXT\n                ),\n                ''\n            ),\n            'unknown'\n        ),\n\n        'prompt_version',\n        COALESCE(\n            NULLIF(\n                $6::TEXT,\n                ''\n            )::INTEGER,\n            1\n        ),\n\n        'registered_by',\n        'WF-015',\n\n        'registered_at',\n        NOW()\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (\n    n8n_execution_id\n)\n\nDO UPDATE SET\n    workflow_code =\n        EXCLUDED.workflow_code,\n\n    source_code =\n        EXCLUDED.source_code,\n\n    trigger_type =\n        EXCLUDED.trigger_type,\n\n    status =\n        'running',\n\n    started_at =\n        NOW(),\n\n    finished_at =\n        NULL,\n\n    batches_processed =\n        0,\n\n    records_read =\n        0,\n\n    records_written =\n        0,\n\n    completion_reason =\n        NULL,\n\n    error_node =\n        NULL,\n\n    error_message =\n        NULL,\n\n    error_details =\n        '{}'::JSONB,\n\n    metadata =\n        COALESCE(\n            ops.workflow_runs.metadata,\n            '{}'::JSONB\n        )\n        || EXCLUDED.metadata,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    id\n        AS workflow_run_id,\n\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n\n    metadata\n        ->> 'processing_mode'\n        AS processing_mode,\n\n    metadata\n        ->> 'maximum_documents'\n        AS maximum_documents,\n\n    metadata\n        ->> 'model_name'\n        AS model_name,\n\n    metadata\n        ->> 'prompt_version'\n        AS prompt_version;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String($execution.id ?? \"\"),\n\n  String(\n    $execution.mode\n    ?? \"unknown\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-015\")\n      .first()\n      .json\n      .processing_mode\n    ?? \"all\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-015\")\n      .first()\n      .json\n      .max_documents\n    ?? 2\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-015\")\n      .first()\n      .json\n      .model_name\n    ?? \"models/gemini-3.1-flash-lite\"\n  ),\n\n  String(\n    $(\"Configurar procesamiento WF-015\")\n      .first()\n      .json\n      .prompt_version\n    ?? 1\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        640,
+        -368
+      ],
+      "id": "7d78888a-adbc-4ef2-a19d-d2a7029b8276",
+      "name": "Registrar inicio WF-015",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ops.workflow_runs (\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    trigger_type,\n    status,\n    started_at,\n    finished_at,\n\n    batches_processed,\n    records_read,\n    records_written,\n\n    completion_reason,\n    error_node,\n    error_message,\n    error_details,\n    metadata,\n\n    created_at,\n    updated_at\n)\n\nVALUES (\n    'WF-015',\n\n    'SECOP_OPPORTUNITY_REQUIREMENT_EXTRACTION',\n\n    $1::TEXT,\n\n    NULLIF(\n        $2::TEXT,\n        ''\n    ),\n\n    'skipped',\n\n    NOW(),\n    NOW(),\n\n    0,\n    0,\n    0,\n\n    'concurrent_execution',\n\n    NULL,\n\n    'La ejecución fue omitida porque otra ejecución de WF-015 posee el bloqueo.',\n\n    '{}'::JSONB,\n\n    jsonb_strip_nulls(\n        jsonb_build_object(\n            'workflow_code',\n            'WF-015',\n\n            'workflow_name',\n            'Extracción IA de requisitos documentales',\n\n            'skip_reason',\n            'concurrent_execution',\n\n            'blocking_execution_id',\n            NULLIF(\n                $3::TEXT,\n                ''\n            ),\n\n            'blocking_lock_expires_at',\n            NULLIF(\n                $4::TEXT,\n                ''\n            ),\n\n            'registered_by',\n            'WF-015',\n\n            'skipped_at',\n            NOW()\n        )\n    ),\n\n    NOW(),\n    NOW()\n)\n\nON CONFLICT (\n    n8n_execution_id\n)\n\nDO UPDATE SET\n    workflow_code =\n        EXCLUDED.workflow_code,\n\n    source_code =\n        EXCLUDED.source_code,\n\n    trigger_type =\n        EXCLUDED.trigger_type,\n\n    status =\n        'skipped',\n\n    finished_at =\n        NOW(),\n\n    batches_processed =\n        0,\n\n    records_read =\n        0,\n\n    records_written =\n        0,\n\n    completion_reason =\n        'concurrent_execution',\n\n    error_node =\n        NULL,\n\n    error_message =\n        EXCLUDED.error_message,\n\n    error_details =\n        '{}'::JSONB,\n\n    metadata =\n        COALESCE(\n            ops.workflow_runs.metadata,\n            '{}'::JSONB\n        )\n        || EXCLUDED.metadata,\n\n    updated_at =\n        NOW()\n\nRETURNING\n    id\n        AS workflow_run_id,\n\n    workflow_code,\n    source_code,\n    n8n_execution_id,\n    status,\n    completion_reason,\n    error_message,\n    started_at,\n    finished_at,\n    metadata;",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $execution.id\n    ?? \"\"\n  ),\n\n  String(\n    $execution.mode\n    ?? \"unknown\"\n  ),\n\n  String(\n    $json.active_execution_id\n    ?? \"\"\n  ),\n\n  String(\n    $json.lock_expires_at\n    ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        624,
+        -176
+      ],
+      "id": "f35b6f62-7eb1-4ea0-b352-0cfc2ff1c43f",
+      "name": "Registrar ejecución omitida WF-015",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH target_run AS (\n    SELECT\n        run.id,\n        run.n8n_execution_id,\n        run.started_at\n\n    FROM ops.workflow_runs\n        AS run\n\n    WHERE run.n8n_execution_id =\n          $1::TEXT\n\n      AND run.workflow_code =\n          'WF-015'\n\n    LIMIT 1\n),\n\ndocument_events AS (\n    SELECT\n        target_run.started_at,\n\n        document.id\n            AS opportunity_document_id,\n\n        document.ai_requirement_status,\n        document.ai_requirement_count,\n\n        CASE\n            WHEN COALESCE(\n                document.metadata\n                    ->> 'last_requirement_analysis_at',\n                ''\n            ) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'\n\n                THEN (\n                    document.metadata\n                        ->> 'last_requirement_analysis_at'\n                )::TIMESTAMPTZ\n\n            ELSE NULL\n        END AS analysis_finished_at,\n\n        CASE\n            WHEN COALESCE(\n                document.metadata\n                    ->> 'last_requirement_failure_at',\n                ''\n            ) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'\n\n                THEN (\n                    document.metadata\n                        ->> 'last_requirement_failure_at'\n                )::TIMESTAMPTZ\n\n            ELSE NULL\n        END AS analysis_failed_at\n\n    FROM target_run\n\n    CROSS JOIN saas.opportunity_documents\n        AS document\n),\n\nexecution_metrics AS (\n    SELECT\n        COUNT(*) FILTER (\n            WHERE\n                analysis_finished_at >=\n                started_at\n\n             OR analysis_failed_at >=\n                started_at\n        )::BIGINT\n            AS documents_processed,\n\n        COUNT(*) FILTER (\n            WHERE ai_requirement_status =\n                  'completed'\n\n              AND analysis_finished_at >=\n                  started_at\n        )::BIGINT\n            AS documents_completed,\n\n        COUNT(*) FILTER (\n            WHERE ai_requirement_status =\n                  'failed'\n\n              AND analysis_failed_at >=\n                  started_at\n        )::BIGINT\n            AS documents_failed,\n\n        COALESCE(\n            SUM(\n                ai_requirement_count\n            ) FILTER (\n                WHERE ai_requirement_status =\n                      'completed'\n\n                  AND analysis_finished_at >=\n                      started_at\n            ),\n            0\n        )::BIGINT\n            AS requirements_saved\n\n    FROM document_events\n),\n\nrun_updated AS (\n    UPDATE ops.workflow_runs\n        AS run\n\n    SET\n        status =\n            'success',\n\n        finished_at =\n            NOW(),\n\n        batches_processed =\n            CASE\n                WHEN execution_metrics\n                        .documents_processed > 0\n                    THEN 1\n\n                ELSE 0\n            END,\n\n        records_read =\n            execution_metrics\n                .documents_processed,\n\n        records_written =\n            execution_metrics\n                .requirements_saved,\n\n        completion_reason =\n            CASE\n                WHEN execution_metrics\n                        .documents_processed = 0\n                    THEN 'no_documents'\n\n                WHEN execution_metrics\n                        .documents_failed > 0\n                    THEN 'completed_with_document_errors'\n\n                ELSE 'completed'\n            END,\n\n        error_node =\n            NULL,\n\n        error_message =\n            NULL,\n\n        error_details =\n            '{}'::JSONB,\n\n        metadata =\n            COALESCE(\n                run.metadata,\n                '{}'::JSONB\n            )\n            || jsonb_build_object(\n                'documents_processed',\n                execution_metrics\n                    .documents_processed,\n\n                'documents_completed',\n                execution_metrics\n                    .documents_completed,\n\n                'documents_failed',\n                execution_metrics\n                    .documents_failed,\n\n                'requirements_saved',\n                execution_metrics\n                    .requirements_saved,\n\n                'last_successful_execution_id',\n                $1::TEXT,\n\n                'finished_by',\n                'WF-015',\n\n                'finished_at',\n                NOW()\n            ),\n\n        updated_at =\n            NOW()\n\n    FROM execution_metrics\n\n    WHERE run.n8n_execution_id =\n          $1::TEXT\n\n      AND run.workflow_code =\n          'WF-015'\n\n    RETURNING\n        run.id\n            AS workflow_run_id,\n\n        run.workflow_code,\n        run.source_code,\n        run.n8n_execution_id,\n        run.status,\n        run.started_at,\n        run.finished_at,\n\n        run.batches_processed,\n        run.records_read,\n        run.records_written,\n\n        run.completion_reason,\n        run.error_message,\n        run.metadata,\n        run.updated_at\n)\n\nSELECT\n    run_updated.*,\n\n    TRUE\n        AS execution_finalized,\n\n    'workflow_run_completed'\n        AS finalization_result\n\nFROM run_updated\n\nUNION ALL\n\nSELECT\n    NULL::UUID,\n    'WF-015'::VARCHAR,\n    'SECOP_OPPORTUNITY_REQUIREMENT_EXTRACTION'::VARCHAR,\n    $1::TEXT,\n    'failed'::VARCHAR,\n    NULL::TIMESTAMPTZ,\n    NOW(),\n    0,\n    0::BIGINT,\n    0::BIGINT,\n    'workflow_run_not_found'::VARCHAR,\n    'No se encontró el registro inicial de la ejecución.'::TEXT,\n    '{}'::JSONB,\n    NOW(),\n\n    FALSE\n        AS execution_finalized,\n\n    'workflow_run_not_found'\n        AS finalization_result\n\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM run_updated\n);",
+        "options": {
+          "queryReplacement": "={{\n[\n  String(\n    $execution.id\n    ?? \"\"\n  )\n]\n}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        656,
+        -512
+      ],
+      "id": "a45b57f3-53df-424b-93aa-8778c524ee1d",
+      "name": "Finalizar ejecución exitosa WF-015",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organization_id"
+            },
+            {
+              "name": "requested_by_user_id"
+            },
+            {
+              "name": "process_id"
+            },
+            {
+              "name": "processing_mode"
+            },
+            {
+              "name": "orchestration_execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        16,
+        -448
+      ],
+      "id": "0d62e306-fef8-466d-b211-0774a541b204",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "CernoIAProdWF020",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/CernoIAProdWF020",
+          "cachedResultName": "[CernoIA PROD] WF-020 — Control de cuota Gemini con Redis"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "provider": "google",
+            "model_name": "={{ $json.model_name ?? $json.ai_requirement_model ?? 'models/gemini-3.1-flash-lite' }}",
+            "workflow_code": "WF-015",
+            "organization_id": "={{ $json.organization_id ?? '' }}",
+            "request_id": "={{ $json.analysis_id ?? $json.opportunity_document_id ?? $json.organization_document_id ?? $json.proposal_package_id ?? 'WF-015-' + $execution.id }}",
+            "payload_json": "={{ JSON.stringify($json) }}",
+            "rpm_limit": "={{ Number($json.gemini_rpm_limit ?? 0) }}",
+            "rpd_limit": "={{ Number($json.gemini_rpd_limit ?? 0) }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "provider",
+              "displayName": "provider",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "model_name",
+              "displayName": "model_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "workflow_code",
+              "displayName": "workflow_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "organization_id",
+              "displayName": "organization_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "request_id",
+              "displayName": "request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "payload_json",
+              "displayName": "payload_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "rpm_limit",
+              "displayName": "rpm_limit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "rpd_limit",
+              "displayName": "rpd_limit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1280,
+        -672
+      ],
+      "id": "015000000-0000-4000-8000-000000000020",
+      "name": "Reservar cuota Gemini WF-015",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "015000000-0000-4000-8000-000000001021",
+              "leftValue": "={{ $json.quota_granted === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1504,
+        -672
+      ],
+      "id": "015000000-0000-4000-8000-000000000021",
+      "name": "¿Cuota Gemini concedida WF-015?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE saas.opportunity_documents\nSET ai_requirement_status = 'queued',\n    ai_requirement_attempt_count = GREATEST(COALESCE(ai_requirement_attempt_count, 1) - 1, 0),\n    ai_requirement_error = 'Análisis aplazado: se alcanzó la cuota diaria configurada para Gemini.',\n    metadata = (COALESCE(metadata, '{}'::JSONB) - 'active_requirement_execution_id' - 'active_requirement_started_at')\n      || jsonb_build_object('quota_deferred_at', NOW(), 'quota_reason', $2::TEXT),\n    updated_at = NOW()\nWHERE id = $1::UUID AND ai_requirement_status = 'running'\nRETURNING id AS opportunity_document_id, organization_id, process_id, ai_requirement_status;",
+        "options": {
+          "queryReplacement": "={{ [ String($json.opportunity_document_id ?? ''), String($json.quota_reason ?? 'daily_limit') ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1728,
+        -560
+      ],
+      "id": "015000000-0000-4000-8000-000000000022",
+      "name": "Liberar documento por cuota WF-015",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Inicio Manual WF-015": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configurar procesamiento WF-015": {
+      "main": [
+        [
+          {
+            "node": "Recuperar análisis IA bloqueados WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recuperar análisis IA bloqueados WF-015": {
+      "main": [
+        [
+          {
+            "node": "Adquirir bloqueo WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adquirir bloqueo WF-015": {
+      "main": [
+        [
+          {
+            "node": "¿Bloqueo adquirido WF-015?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Bloqueo adquirido WF-015?": {
+      "main": [
+        [
+          {
+            "node": "Registrar inicio WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar ejecución omitida WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tomar lote documental WF-015": {
+      "main": [
+        [
+          {
+            "node": "¿Hay documentos para analizar WF-015?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay documentos para analizar WF-015?": {
+      "main": [
+        [
+          {
+            "node": "Procesar documentos uno a uno WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalizar ejecución exitosa WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar documentos uno a uno WF-015": {
+      "main": [
+        [
+          {
+            "node": "Finalizar ejecución exitosa WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar entrada IA WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar entrada IA WF-015": {
+      "main": [
+        [
+          {
+            "node": "Reservar cuota Gemini WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "gemini": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Analizar requisitos con IA WF-015",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar respuesta IA WF-015": {
+      "main": [
+        [
+          {
+            "node": "¿Respuesta IA válida WF-015?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Respuesta IA válida WF-015?": {
+      "main": [
+        [
+          {
+            "node": "Guardar requisitos WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar fallo IA WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar requisitos WF-015": {
+      "main": [
+        [
+          {
+            "node": "Pausa entre análisis WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pausa entre análisis WF-015": {
+      "main": [
+        [
+          {
+            "node": "Procesar documentos uno a uno WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar fallo IA WF-015": {
+      "main": [
+        [
+          {
+            "node": "Pausa entre análisis WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analizar requisitos con IA WF-015": {
+      "main": [
+        [
+          {
+            "node": "Normalizar respuesta IA WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar fallo IA WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar inicio WF-015": {
+      "main": [
+        [
+          {
+            "node": "Tomar lote documental WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar ejecución omitida WF-015": {
+      "main": [
+        [
+          {
+            "node": "Finalizar ejecución omitida WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalizar ejecución exitosa WF-015": {
+      "main": [
+        [
+          {
+            "node": "Liberar bloqueo WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Configurar procesamiento WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reservar cuota Gemini WF-015": {
+      "main": [
+        [
+          {
+            "node": "¿Cuota Gemini concedida WF-015?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Cuota Gemini concedida WF-015?": {
+      "main": [
+        [
+          {
+            "node": "Analizar requisitos con IA WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Liberar documento por cuota WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Liberar documento por cuota WF-015": {
+      "main": [
+        [
+          {
+            "node": "Finalizar ejecución exitosa WF-015",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timezone": "America/Bogota",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "CernoIAProdWF007",
+    "executionTimeout": 1800,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

@@ -1,0 +1,89 @@
+{
+  "id": "CernoIAProdWF007",
+  "name": "[CernoIA PROD] WF-007 - Gestión de errores y recuperación",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "d2c06178-e830-4300-88b8-ac34ab706ea9",
+      "name": "Error recibido de n8n"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $input.first().json ?? {};\n\nconst execution = payload.execution ?? {};\nconst trigger = payload.trigger ?? {};\nconst workflow = payload.workflow ?? {};\n\nconst error =\n  execution.error\n  ?? trigger.error\n  ?? {};\n\nconst cause =\n  error.cause\n  ?? {};\n\nconst workflowName = String(\n  workflow.name\n  ?? 'Workflow desconocido'\n);\n\nconst workflowId = String(\n  workflow.id\n  ?? ''\n);\n\nconst workflowCodeMatch =\n  workflowName\n    .toUpperCase()\n    .match(/\\bWF-\\d{3}\\b/);\n\nconst workflowCode =\n  workflowCodeMatch?.[0]\n  ?? 'UNKNOWN';\n\nconst sourceCodes = {\n  'WF-001':\n    'SECOP_II_PROCESSES',\n\n  'WF-002':\n    'SECOP_II_PROCESS_VERSIONS',\n\n  'WF-003':\n    'SECOP_II_DOCUMENTS_2025',\n\n  'WF-005':\n    'SECOP_II_PROFILE_MATCHES',\n\n  'WF-014':\n    'SECOP_OPPORTUNITY_DOCUMENT_EXTRACTION',\n\n  'WF-015':\n    'SECOP_OPPORTUNITY_REQUIREMENT_EXTRACTION',\n\n  'WF-016':\n  'SECOP_OPPORTUNITY_REQUIREMENT_CONSOLIDATION',\n\n  'WF-012':\n  'SECOP_ORGANIZATION_DOCUMENT_VALIDITY',\n\n  'WF-017':\n    'SECOP_OPPORTUNITY_COMPLIANCE_EVALUATION',\n  \n  'WF-018':\n  'SECOP_OPPORTUNITY_ACTION_PLAN_GENERATION',\n\n  'WF-019':\n  'SECOP_PIPELINE_ORCHESTRATION',\n};\n\nconst sourceCode =\n  sourceCodes[workflowCode]\n  ?? '';\n\nconst originalExecutionId =\n  execution.id\n    ? String(execution.id)\n    : '';\n\nconst fallbackExecutionId =\n  `trigger-${workflowCode}-${String(\n    workflowId || 'unknown'\n  )}-${Date.now()}`;\n\nconst failedExecutionId =\n  originalExecutionId\n  || fallbackExecutionId;\n\nconst errorMessage = String(\n  error.message\n  ?? cause.message\n  ?? 'Error sin mensaje informado por n8n'\n);\n\nconst errorStack = String(\n  error.stack\n  ?? cause.stack\n  ?? ''\n);\n\nconst lastNodeExecuted = String(\n  execution.lastNodeExecuted\n  ?? error.node?.name\n  ?? 'trigger_or_unknown'\n);\n\nconst executionMode = String(\n  execution.mode\n  ?? trigger.mode\n  ?? 'unknown'\n);\n\nconst executionUrl = String(\n  execution.url\n  ?? ''\n);\n\nconst retryOf = String(\n  execution.retryOf\n  ?? ''\n);\n\nconst limitedMessage =\n  errorMessage.slice(0, 10000);\n\nconst limitedStack =\n  errorStack.slice(0, 50000);\n\nconst safeJsonStringify = (value) => {\n  const seen = new WeakSet();\n\n  return JSON.stringify(\n    value,\n    (_key, currentValue) => {\n      if (typeof currentValue === 'bigint') {\n        return currentValue.toString();\n      }\n\n      if (\n        currentValue\n        && typeof currentValue === 'object'\n      ) {\n        if (seen.has(currentValue)) {\n          return '[Circular]';\n        }\n\n        seen.add(currentValue);\n      }\n\n      return currentValue;\n    }\n  );\n};\n\nconst errorDetailsJson =\n  safeJsonStringify({\n    stack:\n      limitedStack || null,\n\n    raw_error:\n      payload,\n  });\n\nconst runMetadataJson =\n  safeJsonStringify({\n    workflow_code:\n      workflowCode || 'UNKNOWN',\n\n    workflow_name:\n      workflowName,\n\n    workflow_id:\n      workflowId || null,\n\n    source_code:\n      sourceCode || null,\n\n    execution_url:\n      executionUrl || null,\n\n    retry_of:\n      retryOf || null,\n\n    handled_by:\n      'WF-007',\n\n    handled_at:\n      new Date().toISOString(),\n  });\n\nconst cursorMetadataJson =\n  safeJsonStringify({\n    workflow_code:\n      workflowCode || 'UNKNOWN',\n\n    last_error_execution_id:\n      failedExecutionId,\n\n    last_error_node:\n      lastNodeExecuted,\n\n    last_error_message:\n      limitedMessage,\n\n    last_error_at:\n      new Date().toISOString(),\n\n    error_handled_by:\n      'WF-007',\n  });\n\nreturn [\n  {\n    json: {\n      workflow_code:\n        workflowCode,\n\n      source_code:\n        sourceCode,\n\n      failed_execution_id:\n        failedExecutionId,\n\n      original_execution_id:\n        originalExecutionId,\n\n      has_execution_id:\n        Boolean(originalExecutionId),\n\n      workflow_name:\n        workflowName,\n\n      workflow_id:\n        workflowId,\n\n      execution_mode:\n        executionMode,\n\n      execution_url:\n        executionUrl,\n\n      retry_of:\n        retryOf,\n\n      last_node_executed:\n        lastNodeExecuted,\n\n      error_message:\n        limitedMessage,\n\n      error_stack:\n        limitedStack,\n\n      raw_error:\n        payload,\n\n      error_details_json:\n        errorDetailsJson,\n\n      run_metadata_json:\n        runMetadataJson,\n\n      cursor_metadata_json:\n        cursorMetadataJson,\n\n      query_parameters: [\n        workflowCode || 'UNKNOWN',\n        sourceCode || null,\n        failedExecutionId,\n        executionMode || null,\n        lastNodeExecuted || null,\n        limitedMessage || null,\n        errorDetailsJson,\n        runMetadataJson,\n        originalExecutionId || null,\n        cursorMetadataJson,\n      ],\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "68c345fd-3211-4c65-ba8e-591d7313dfd9",
+      "name": "Normalizar error del sistema2"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH run_upsert AS (\n    INSERT INTO ops.workflow_runs\n    (\n        workflow_code,\n        source_code,\n        n8n_execution_id,\n        trigger_type,\n        status,\n\n        started_at,\n        finished_at,\n\n        completion_reason,\n\n        error_node,\n        error_message,\n        error_details,\n\n        metadata,\n\n        created_at,\n        updated_at\n    )\n\n    VALUES\n    (\n        COALESCE(\n            NULLIF(\n                $1::TEXT,\n                ''\n            ),\n            'UNKNOWN'\n        ),\n\n        NULLIF(\n            $2::TEXT,\n            ''\n        ),\n\n        $3::TEXT,\n\n        NULLIF(\n            $4::TEXT,\n            ''\n        ),\n\n        'failed',\n\n        NOW(),\n        NOW(),\n\n        'workflow_error',\n\n        NULLIF(\n            $5::TEXT,\n            ''\n        ),\n\n        NULLIF(\n            $6::TEXT,\n            ''\n        ),\n\n        COALESCE(\n            NULLIF(\n                $7::TEXT,\n                ''\n            ),\n            '{}'\n        )::JSONB,\n\n        COALESCE(\n            NULLIF(\n                $8::TEXT,\n                ''\n            ),\n            '{}'\n        )::JSONB,\n\n        NOW(),\n        NOW()\n    )\n\n    ON CONFLICT\n    (\n        n8n_execution_id\n    )\n\n    DO UPDATE\n\n    SET\n        workflow_code =\n            EXCLUDED.workflow_code,\n\n        source_code =\n            EXCLUDED.source_code,\n\n        trigger_type =\n            COALESCE(\n                EXCLUDED.trigger_type,\n                ops.workflow_runs.trigger_type\n            ),\n\n        status =\n            'failed',\n\n        finished_at =\n            NOW(),\n\n        completion_reason =\n            'workflow_error',\n\n        error_node =\n            EXCLUDED.error_node,\n\n        error_message =\n            EXCLUDED.error_message,\n\n        error_details =\n            EXCLUDED.error_details,\n\n        metadata =\n            COALESCE(\n                ops.workflow_runs.metadata,\n                '{}'::JSONB\n            )\n            ||\n            EXCLUDED.metadata,\n\n        updated_at =\n            NOW()\n\n    RETURNING\n        id,\n        workflow_code,\n        source_code,\n        n8n_execution_id,\n        trigger_type,\n        status,\n\n        started_at,\n        finished_at,\n\n        completion_reason,\n\n        error_node,\n        error_message,\n\n        batches_processed,\n        records_read,\n        records_written,\n\n        cursor_start_timestamp,\n        cursor_start_process_id,\n\n        cursor_end_timestamp,\n        cursor_end_process_id,\n\n        metadata\n),\n\ncursor_release AS (\n    UPDATE ops.sync_cursors\n        AS cursor\n\n    SET\n        active_execution_id =\n            NULL,\n\n        lock_acquired_at =\n            NULL,\n\n        lock_expires_at =\n            NULL,\n\n        status =\n            'error',\n\n        error_message =\n            NULLIF(\n                $6::TEXT,\n                ''\n            ),\n\n        metadata =\n            (\n                COALESCE(\n                    cursor.metadata,\n                    '{}'::JSONB\n                )\n\n                - 'current_execution_id'\n                - 'current_execution_batches'\n                - 'current_execution_records'\n                - 'current_execution_started_at'\n\n                - 'active_workflow'\n                - 'active_execution_id'\n                - 'active_execution_started_at'\n            )\n\n            ||\n\n            COALESCE(\n                NULLIF(\n                    $10::TEXT,\n                    ''\n                ),\n                '{}'\n            )::JSONB,\n\n        updated_at =\n            NOW()\n\n    WHERE cursor.source_code =\n          NULLIF(\n              $2::TEXT,\n              ''\n          )\n\n      AND\n      (\n          /*\n           * Ejecución original reportada por n8n.\n           */\n          cursor.active_execution_id::TEXT =\n              NULLIF(\n                  $9::TEXT,\n                  ''\n              )\n\n          OR\n\n          /*\n           * Ejecución efectiva/fallback manejada por WF-007.\n           */\n          cursor.active_execution_id::TEXT =\n              $3::TEXT\n\n          OR\n\n          /*\n           * Compatibilidad con workflows anteriores.\n           */\n          cursor.metadata\n              ->> 'current_execution_id'\n              =\n              $3::TEXT\n\n          OR\n\n          /*\n           * Compatibilidad con WF-012 / WF-017.\n           */\n          cursor.metadata\n              ->> 'active_execution_id'\n              =\n              $3::TEXT\n\n          OR\n\n          cursor.metadata\n              ->> 'active_execution_id'\n              =\n              NULLIF(\n                  $9::TEXT,\n                  ''\n              )\n      )\n\n    RETURNING\n        cursor.source_code,\n\n        cursor.cursor_timestamp,\n        cursor.cursor_process_id,\n\n        cursor.status,\n\n        cursor.active_execution_id,\n        cursor.lock_acquired_at,\n        cursor.lock_expires_at,\n\n        cursor.error_message,\n        cursor.metadata,\n        cursor.updated_at\n)\n\nSELECT\n    run_upsert.id\n        AS workflow_run_id,\n\n    run_upsert.workflow_code,\n    run_upsert.source_code,\n    run_upsert.n8n_execution_id,\n    run_upsert.trigger_type,\n\n    run_upsert.status\n        AS workflow_run_status,\n\n    run_upsert.started_at,\n    run_upsert.finished_at,\n\n    run_upsert.completion_reason,\n\n    run_upsert.error_node,\n    run_upsert.error_message,\n\n    run_upsert.batches_processed,\n    run_upsert.records_read,\n    run_upsert.records_written,\n\n    run_upsert.cursor_start_timestamp,\n    run_upsert.cursor_start_process_id,\n\n    run_upsert.cursor_end_timestamp,\n    run_upsert.cursor_end_process_id,\n\n    cursor_release.status\n        AS cursor_status,\n\n    cursor_release.active_execution_id,\n\n    cursor_release.lock_acquired_at,\n    cursor_release.lock_expires_at,\n\n    cursor_release.cursor_timestamp,\n    cursor_release.cursor_process_id,\n\n    cursor_release.updated_at\n        AS cursor_updated_at\n\nFROM run_upsert\n\nLEFT JOIN cursor_release\n    ON TRUE;",
+        "options": {
+          "queryReplacement": "={{ $json.query_parameters }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        400,
+        0
+      ],
+      "id": "27b7a637-6b14-46aa-8052-79c163c048e1",
+      "name": "Registrar fallo y recuperar workflow2",
+      "credentials": {
+        "postgres": {
+          "id": "CernoIAProdPostgres",
+          "name": "CernoIA PostgreSQL API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error recibido de n8n": {
+      "main": [
+        [
+          {
+            "node": "Normalizar error del sistema2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar error del sistema2": {
+      "main": [
+        [
+          {
+            "node": "Registrar fallo y recuperar workflow2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timezone": "America/Bogota",
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionTimeout": 1800,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false
+}

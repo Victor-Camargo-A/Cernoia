@@ -1,0 +1,137 @@
+{
+  "generated_at": "2026-09-09T02:06:32.323632+00:00",
+  "import_safety": "Exportaciones inactivas; preservar credenciales. WF-000 permanece inactivo. WF-025 mantiene horario suspendido. WF-026 publicado con conciliación de Bold cada 6 horas.",
+  "activation_order": [
+    "WF-007",
+    "WF-020",
+    "WF-001",
+    "WF-002",
+    "WF-003",
+    "WF-005",
+    "WF-008",
+    "WF-011",
+    "WF-012",
+    "WF-013",
+    "WF-014",
+    "WF-015",
+    "WF-016",
+    "WF-017",
+    "WF-018",
+    "WF-021",
+    "WF-022",
+    "WF-023",
+    "WF-024",
+    "WF-025",
+    "WF-026",
+    "WF-019"
+  ],
+  "orchestrated_stages": [
+    "WF-001",
+    "WF-002",
+    "WF-003",
+    "WF-005",
+    "WF-008",
+    "WF-013",
+    "WF-014",
+    "WF-015",
+    "WF-016",
+    "WF-012",
+    "WF-017",
+    "WF-018"
+  ],
+  "workflows": {
+    "WF-001": {
+      "id": "CernoIAProdWF001",
+      "file": "WF-001-sincronizacion-incremental.json"
+    },
+    "WF-002": {
+      "id": "CernoIAProdWF002",
+      "file": "WF-002-historial-cambios.json"
+    },
+    "WF-003": {
+      "id": "CernoIAProdWF003",
+      "file": "WF-003-metadatos-documentos.json"
+    },
+    "WF-005": {
+      "id": "CernoIAProdWF005",
+      "file": "WF-005-motor-coincidencias.json"
+    },
+    "WF-007": {
+      "id": "CernoIAProdWF007",
+      "file": "WF-007-gestion-errores.json"
+    },
+    "WF-008": {
+      "id": "CernoIAProdWF008",
+      "file": "WF-008-preanalisis-ia.json"
+    },
+    "WF-011": {
+      "id": "CernoIAProdWF011",
+      "file": "WF-011-validacion-documento-empresarial.json"
+    },
+    "WF-012": {
+      "id": "CernoIAProdWF012",
+      "file": "WF-012-vigencias-documentales.json"
+    },
+    "WF-013": {
+      "id": "CernoIAProdWF013",
+      "file": "WF-013-matriz-documental.json"
+    },
+    "WF-014": {
+      "id": "CernoIAProdWF014",
+      "file": "WF-014-extraccion-documental.json"
+    },
+    "WF-015": {
+      "id": "CernoIAProdWF015",
+      "file": "WF-015-extraccion-ia-requisitos.json"
+    },
+    "WF-016": {
+      "id": "CernoIAProdWF016",
+      "file": "WF-016-consolidacion-requisitos.json"
+    },
+    "WF-017": {
+      "id": "CernoIAProdWF017",
+      "file": "WF-017-evaluacion-cumplimiento.json"
+    },
+    "WF-018": {
+      "id": "CernoIAProdWF018",
+      "file": "WF-018-plan-accion.json"
+    },
+    "WF-019": {
+      "id": "CernoIAProdWF019",
+      "file": "WF-019-orquestador-pipeline.json"
+    },
+    "WF-020": {
+      "id": "CernoIAProdWF020",
+      "file": "WF-020-control-cuota-gemini-redis.json"
+    },
+    "WF-021": {
+      "id": "CernoIAProdWF021",
+      "file": "WF-021-alertas-documentales-ia.json"
+    },
+    "WF-022": {
+      "id": "CernoIAProdWF022",
+      "file": "WF-022-generacion-paquete-propuesta.json"
+    },
+    "WF-023": {
+      "id": "CernoIAProdWF023",
+      "file": "WF-023-chat-cernoia-controlado.json"
+    },
+    "WF-024": {
+      "id": "CernoIAProdWF024",
+      "file": "WF-024-ocr-revision-documental.json"
+    },
+    "WF-025": {
+      "id": "CernoIAProdWF025",
+      "file": "WF-025-entrega-notificaciones.json"
+    },
+    "WF-026": {
+      "id": "CernoIAProdWF026",
+      "file": "WF-026-renovaciones-bold.json"
+    },
+    "WF-000": {
+      "id": "CernoIAProdWF000",
+      "file": "WF-000-inicializacion-segura.json"
+    }
+  },
+  "deployment_domain": "n8n.secretbloom.tech"
+}

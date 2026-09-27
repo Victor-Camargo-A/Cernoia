@@ -81,7 +81,7 @@ Actualizado: 2026-09-27 UTC. Esta memoria orienta tareas localizadas; consultar 
 - Antes y después de cambios: `git status --short`; revisar sólo `git diff -- ARCHIVO` y no sobrescribir trabajo ajeno.
 - Pruebas por capas: test específico, luego módulo; build/suite completa sólo si el cambio lo justifica.
 - No desplegar desde Git ni tocar DNS, SSL, pagos, credenciales o datos productivos sin petición explícita.
-- Para retomar una sesión, invocar `$cernoia-session`; carga este contexto y el estado Git. Al cierre conserva sólo cambios materiales y pendientes vigentes, no un diario de comandos.
+- Para retomar una sesión VPS, invocar `$vps-session`; carga `VPS_CONTEXT.md`, este contexto y el estado Git relevante. Al cierre conserva sólo cambios materiales y pendientes vigentes, no un diario de comandos.
 
 ## Funcionalidad implementada
 
